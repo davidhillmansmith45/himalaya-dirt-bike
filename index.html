@@ -876,6 +876,25 @@ function makeBikeProcedural() {
   g.userData.exhaustAnchor = exhaustAnchor;
   g.userData.mixer = null; g.userData.wheelAction = null; g.userData.useClip = false;
   g.userData.rollAxis = 'z';
+  g.userData.wheelRadius = 0.45;
+  // Ground contact: shift so lowest mesh point (tire tread) sits at local y=0
+  g.updateMatrixWorld(true);
+  {
+    let minY = Infinity;
+    const _v = new THREE.Vector3();
+    g.traverse(o => {
+      if (!o.isMesh || !o.geometry) return;
+      o.geometry.computeBoundingBox();
+      const bb = o.geometry.boundingBox;
+      for (const p of [bb.min, bb.max]) {
+        _v.copy(p).applyMatrix4(o.matrixWorld);
+        if (_v.y < minY) minY = _v.y;
+      }
+    });
+    if (Number.isFinite(minY) && Math.abs(minY) > 1e-6) {
+      for (const child of g.children) child.position.y -= minY;
+    }
+  }
   return g;
 }
 
@@ -899,6 +918,8 @@ function finalizeGlbBike(gltf) {
     }
   });
   if (Number.isFinite(minY)) model.position.y -= minY;
+  // After scale+ground, wheel bottoms are at local y=0; radius ~0.43
+  root.userData.wheelRadius = 0.43;
   applyPBRToObject(model);
   root.add(model);
 
@@ -1000,7 +1021,7 @@ let t0 = 0;
 function reset(fromMenu) {
   const gnd = groundAt(5, 0);
   Object.assign(state, {
-    x: 5, z: 0, y: gnd.y + 1.0,
+    x: 5, z: 0, y: gnd.y,
     vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, roll: 0,
     speed: 0, grounded: true, airTime: 0,
     running: true, finished: false, alive: true, cp: 0, bestAir: 0, sliding: false
@@ -1042,7 +1063,7 @@ function spawnDust(forward, amount) {
   for (let i = 0; i < DUST_N && spawned < amount; i++) {
     if (dustVel[i].life > 0) continue;
     dustPos[i * 3] = state.x - forward.x * 1.4 + (Math.random() - 0.5) * 0.9;
-    dustPos[i * 3 + 1] = state.y - 0.7;
+    dustPos[i * 3 + 1] = state.y + 0.12;
     dustPos[i * 3 + 2] = state.z - forward.z * 1.4 + (Math.random() - 0.5) * 0.9;
     dustSize[i] = 0.35 + Math.random() * 0.7;
     dustVel[i] = {
@@ -1072,7 +1093,7 @@ function placeSkid(forward) {
   skidCursor = (skidCursor + 1) % SKID_N;
   const m = s.mesh;
   m.visible = true;
-  m.position.set(state.x - forward.x * 0.9, state.y - 0.92, state.z - forward.z * 0.9);
+  m.position.set(state.x - forward.x * 0.9, state.y + 0.03, state.z - forward.z * 0.9);
   m.rotation.z = -state.yaw;
   m.material.opacity = 0.5;
   s.life = 4.5;
@@ -1119,18 +1140,25 @@ function physics(dt) {
     const s = maxSpd / state.speed; state.vx *= s; state.vz *= s; state.speed = maxSpd;
   }
   const g2 = groundAt(state.x, state.z);
-  const targetY = g2.y + 0.95;
-  if (state.y <= targetY) {
+  // Root origin is wheel contact (meshes grounded to local y=0) — no axle offset
+  const targetY = g2.y;
+  if (state.grounded) {
+    // Stay planted and follow track height (incl. downhill) unless leaving a crest
+    const drop = state.y - targetY;
+    if (drop > 0.55 && state.vy <= 0) {
+      state.grounded = false; state.airTime += dt;
+    } else {
+      state.y = targetY; state.vy = 0; state.airTime = 0;
+    }
+  } else if (state.y <= targetY) {
     const impact = -state.vy;
     state.y = targetY;
-    if (!state.grounded) {
-      state.bestAir = Math.max(state.bestAir, state.airTime);
-      if (impact > 18) spawnLandingBurst(forward);
-      if (impact > 28) { state.vx *= 0.4; state.vz *= 0.4; toast('Hard landing!'); }
-      else if (state.airTime > 0.55) toast('Nice air!');
-    }
+    state.bestAir = Math.max(state.bestAir, state.airTime);
+    if (impact > 18) spawnLandingBurst(forward);
+    if (impact > 28) { state.vx *= 0.4; state.vz *= 0.4; toast('Hard landing!'); }
+    else if (state.airTime > 0.55) toast('Nice air!');
     state.vy = 0; state.grounded = true; state.airTime = 0;
-  } else { state.grounded = false; state.airTime += dt; }
+  } else { state.airTime += dt; }
 
   const targetRoll = steer * (-0.45) - (g2.lat / 18) * 0.35;
   state.roll += (targetRoll - state.roll) * Math.min(1, 10 * dt);
@@ -1248,7 +1276,7 @@ addEventListener('resize', () => {
 
 {
   const gnd = groundAt(5, 0);
-  state.y = gnd.y + 1;
+  state.y = gnd.y;
   state.yaw = Math.atan2(pathTangent(0.01).x, -pathTangent(0.01).z);
   syncBike();
 }
