@@ -175,59 +175,83 @@ function fbm(x, z) {
 }
 
 const TRACK_LEN = 1100;
-const HALF_W = 14;
+const HALF_W = 12; // packed-dirt strip ~24u wide (20–28u target)
+const FLOOR_Y = 0; // green scrub plane; track sits ON/near this
 const checkpoints = [];
 const gates = [];
 
+/** Gentle MX tabletop: height is crest meters, width is t-span fraction. */
 function tabletop(t, center, height, width) {
   const d = (t - center) / width;
   if (d < -1 || d > 2.2) return 0;
-  if (d < 0) return (1 + d) * height * 0.4;
-  if (d < 0.55) return height * (0.4 + d * 0.9);
-  if (d < 1.1) return height * 0.95;
-  return Math.max(0, height * (0.95 - (d - 1.1) * 0.85));
+  if (d < 0) return (1 + d) * height * 0.35;          // face
+  if (d < 0.55) return height * (0.35 + d * 0.95);    // rise
+  if (d < 1.1) return height * 0.9;                   // deck
+  return Math.max(0, height * (0.9 - (d - 1.1) * 0.8)); // landing
 }
+
+/** Whoops / tabletops / doubles — heights capped to MX-realistic 1–6. */
 function jumpProfile(t) {
   let y = 0;
+  // Start whoops (~1.5–2.5m)
   if (t > 0.08 && t < 0.16) {
     const u = (t - 0.08) / 0.08;
-    y += Math.sin(u * Math.PI * 10) * 0.55 * Math.sin(u * Math.PI);
+    y += Math.sin(u * Math.PI * 10) * 1.6 * Math.sin(u * Math.PI);
   }
-  y += tabletop(t, 0.22, 18, 0.045);
-  y += tabletop(t, 0.38, 14, 0.028);
-  y += tabletop(t, 0.42, 16, 0.028);
+  // Small tabletop (~4.5m)
+  y += tabletop(t, 0.22, 4.5, 0.045);
+  // Doubles (~3.2 / 3.6m)
+  y += tabletop(t, 0.38, 3.2, 0.028);
+  y += tabletop(t, 0.42, 3.6, 0.028);
+  // Mid whoops
   if (t > 0.50 && t < 0.58) {
     const u = (t - 0.50) / 0.08;
-    y += Math.sin(u * Math.PI * 12) * 0.48 * Math.sin(u * Math.PI);
+    y += Math.sin(u * Math.PI * 12) * 1.4 * Math.sin(u * Math.PI);
   }
-  y += tabletop(t, 0.66, 22, 0.05);
-  y += tabletop(t, 0.80, 15, 0.03);
-  y += tabletop(t, 0.84, 17, 0.03);
+  // Main tabletop (~5.5m — largest feature)
+  y += tabletop(t, 0.66, 5.5, 0.05);
+  // Late doubles
+  y += tabletop(t, 0.80, 3.5, 0.03);
+  y += tabletop(t, 0.84, 4.0, 0.03);
+  // Finish whoops
   if (t > 0.90 && t < 0.96) {
     const u = (t - 0.90) / 0.06;
-    y += Math.sin(u * Math.PI * 6) * 0.4 * Math.sin(u * Math.PI);
+    y += Math.sin(u * Math.PI * 6) * 1.2 * Math.sin(u * Math.PI);
   }
   return y;
 }
+
 function bermFactor(t) {
   const turns = [0.12, 0.28, 0.45, 0.62, 0.78, 0.92];
   let b = 0;
   for (const ct of turns) {
     const d = Math.abs(t - ct);
-    if (d < 0.04) b = Math.max(b, 1 - d / 0.04);
+    if (d < 0.045) b = Math.max(b, 1 - d / 0.045);
   }
   return b;
 }
+
+/**
+ * Centerline of packed-dirt MX circuit.
+ * Path Y variation capped ~8u over the whole course (gentle hills + jumps).
+ * Flat start: t∈[0,0.06] stays near FLOOR_Y.
+ */
 function pathPoint(t) {
   const s = t * TRACK_LEN;
   const x = s;
   const z = Math.sin(t * Math.PI * 2.4) * 62
     + Math.sin(t * Math.PI * 5.4) * 16
     + Math.sin(t * Math.PI * 0.75) * 28;
-  let y = Math.sin(t * Math.PI * 2.8) * 5
-    + Math.sin(t * Math.PI * 6.5) * 1.8
-    + t * 6
-    + jumpProfile(t);
+  // Base undulation (~±1.2) + mild climb (~1.5) + jumpProfile (max ~5.5)
+  // Path Y span capped ~8 and kept on/near green ground plane.
+  const flatBlend = THREE.MathUtils.smoothstep(0.0, 0.06, t); // 0 at start → 1 after flat spawn
+  let y = FLOOR_Y
+    + (Math.sin(t * Math.PI * 2.8) * 1.2
+      + Math.sin(t * Math.PI * 6.5) * 0.45
+      + t * 1.5
+      + jumpProfile(t)) * flatBlend;
+  // Never dig under scrub floor
+  if (y < FLOOR_Y) y = FLOOR_Y;
   return new THREE.Vector3(x, y, z);
 }
 function pathTangent(t) {
@@ -270,32 +294,38 @@ dirtTex.repeat.set(28, 28);
 const grassTex = makeNoiseTex(128, (n) => [55 + n * 35 | 0, 95 + n * 55 | 0, 35 + n * 20 | 0]);
 grassTex.repeat.set(20, 20);
 
+/**
+ * Cross-section height relative to pathPoint.
+ * Berms = gentle banks (1–3u), NOT cliffs. Outer edge soft fade into scrub.
+ */
 function surfaceHeight(t, lat) {
   const absLat = Math.abs(lat);
   let bank = 0;
-  if (absLat > 0.28) {
-    const e = (absLat - 0.28) / 0.72;
-    bank = Math.pow(e, 1.45) * 12 + Math.pow(e, 3.0) * 16;
+  // Soft shoulder crown — keeps dirt packed, not a wall
+  if (absLat > 0.55) {
+    const e = (absLat - 0.55) / 0.45;
+    bank = Math.pow(e, 1.6) * 1.8; // max ~1.8u at lip
   }
   const bf = bermFactor(t);
-  if (bf > 0 && absLat > 0.15) {
+  if (bf > 0 && absLat > 0.2) {
     const curl = Math.sin(t * Math.PI * 2.4);
     const outer = (curl >= 0 ? 1 : -1) * Math.sign(lat || 1);
-    if (outer > 0) bank += bf * absLat * absLat * 7.5;
+    if (outer > 0) bank += bf * absLat * absLat * 2.8; // berm bank max ~2.8u
   }
   let whoop = 0;
-  if (absLat < 0.32) {
+  if (absLat < 0.4) {
     if (t > 0.08 && t < 0.16) {
       const u = (t - 0.08) / 0.08;
-      whoop = Math.sin(u * Math.PI * 10 + lat * 6) * 0.5 * (1 - absLat / 0.32) * Math.sin(u * Math.PI);
+      whoop = Math.sin(u * Math.PI * 10 + lat * 6) * 0.45 * (1 - absLat / 0.4) * Math.sin(u * Math.PI);
     } else if (t > 0.50 && t < 0.58) {
       const u = (t - 0.50) / 0.08;
-      whoop = Math.sin(u * Math.PI * 12 + lat * 5) * 0.42 * (1 - absLat / 0.32) * Math.sin(u * Math.PI);
+      whoop = Math.sin(u * Math.PI * 12 + lat * 5) * 0.4 * (1 - absLat / 0.4) * Math.sin(u * Math.PI);
     }
   }
-  const ripple = fbm(t * 40 + lat * 3, lat * 8) * (0.2 + absLat * 1.8);
-  let y = bank + whoop + ripple * (absLat > 0.25 ? 1 : 0.2);
-  if (absLat > 0.9) y += (absLat - 0.9) * 28;
+  const ripple = fbm(t * 40 + lat * 3, lat * 8) * (0.08 + absLat * 0.35);
+  let y = bank + whoop + ripple * (absLat > 0.3 ? 1 : 0.15);
+  // Soft drop at extreme edge into scrub (no 28u cliff)
+  if (absLat > 0.92) y -= (absLat - 0.92) * 4;
   return y;
 }
 
@@ -574,21 +604,36 @@ scene.add(course.group);
 scene.add(buildMountains());
 
 {
+  // Green scrub blended with the dirt strip — no void under the track.
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(3600, 3600, 32, 32),
+    new THREE.PlaneGeometry(3600, 3600, 48, 48),
     new THREE.MeshStandardMaterial({ map: grassTex, color: 0x4a6a32, roughness: 1, metalness: 0 })
   );
   floor.rotation.x = -Math.PI / 2;
-  floor.position.set(550, -38, 0);
+  floor.position.set(550, FLOOR_Y - 0.15, 0);
   floor.receiveShadow = true;
   const fp = floor.geometry.attributes.position;
-  for (let i = 0; i < fp.count; i++) fp.setZ(i, fp.getZ(i) + fbm(fp.getX(i) * 0.01, fp.getY(i) * 0.01) * 10);
+  for (let i = 0; i < fp.count; i++) {
+    const lx = fp.getX(i), ly = fp.getY(i); // local XZ before mesh rot (Y is Z in world)
+    // Mild scrub undulation (~±1.2); stay under track so dirt sits on top
+    fp.setZ(i, fbm(lx * 0.012, ly * 0.012) * 1.2);
+  }
   floor.geometry.computeVertexNormals();
   scene.add(floor);
+
+  // Dirt apron: soft brown strip under/beside the racing line so green doesn't peek through voids
+  const apron = new THREE.Mesh(
+    new THREE.PlaneGeometry(TRACK_LEN + 80, HALF_W * 3.2, 64, 8),
+    new THREE.MeshStandardMaterial({ map: dirtTex, color: 0xb8894e, roughness: 0.97, metalness: 0.02 })
+  );
+  apron.rotation.x = -Math.PI / 2;
+  apron.position.set(TRACK_LEN * 0.5, FLOOR_Y - 0.05, 0);
+  apron.receiveShadow = true;
+  scene.add(apron);
 }
 
 function groundAt(x, z) {
-  // Nearest path sample in XZ — must match buildCourse mesh (pathPoint + surfaceHeight)
+  // Nearest path sample in XZ — Y MUST equal buildCourse mesh (pathPoint + surfaceHeight)
   let bestT = 0, bestD = 1e9;
   const samples = 720;
   for (let i = 0; i <= samples; i++) {
@@ -615,8 +660,15 @@ function groundAt(x, z) {
   const rel = new THREE.Vector3(x - p.x, 0, z - p.z);
   const lat = rel.dot(side);
   const u = Math.max(-1, Math.min(1, lat / HALF_W));
-  const y = p.y + surfaceHeight(bestT, u);
-  return { y, t: bestT, lat, tang, side, onTrack: Math.abs(lat) < HALF_W * 0.58 };
+  let y = p.y + surfaceHeight(bestT, u);
+  // Beyond the packed strip, ease toward scrub floor so props/bike don't float in void
+  const edge = HALF_W * 1.05;
+  if (Math.abs(lat) > edge) {
+    const off = Math.min(1, (Math.abs(lat) - edge) / (HALF_W * 0.8));
+    const scrub = FLOOR_Y + fbm(x * 0.012, z * 0.012) * 1.2;
+    y = THREE.MathUtils.lerp(y, scrub, off);
+  }
+  return { y, t: bestT, lat, tang, side, onTrack: Math.abs(lat) < HALF_W * 0.72 };
 }
 
 function makeCanvasTex(draw, size = 256, repeat = 2) {
@@ -987,7 +1039,7 @@ new GLTFLoader().load('./models/dirt-bike.glb', (gltf) => {
   try {
     const loaded = finalizeGlbBike(gltf);
     scene.remove(bike); bike = loaded; scene.add(bike);
-    if (!state.running) placeAtTrack(0.01);
+    if (!state.running) placeAtTrack(0.02);
     else { const g = groundAt(state.x, state.z); state.y = g.y; state.grounded = true; }
     syncBike(0);
     console.info('[bike] GLB loaded', { wheels: bike.userData.wheels.length, useClip: bike.userData.useClip });
@@ -1087,7 +1139,7 @@ function reset(fromMenu) {
   document.getElementById('toast').textContent = '';
   t0 = performance.now();
   syncBike(0);
-  camPos.set(state.x - Math.sin(state.yaw) * 7.8, state.y + 3.4, state.z + Math.cos(state.yaw) * 7.8);
+  camPos.set(state.x - Math.sin(state.yaw) * 8.2, state.y + 3.6, state.z + Math.cos(state.yaw) * 8.2);
   camera.position.copy(camPos);
   camera.lookAt(state.x, state.y + 1.35, state.z);
   if (!fromMenu) canvas.requestPointerLock();
@@ -1185,7 +1237,7 @@ function physics(dt) {
   state.vx *= Math.exp(-drag * dt); state.vz *= Math.exp(-drag * dt);
   state.vy -= 29 * dt;
   if (jumpPressed && state.grounded) {
-    state.vy = 11.5 + Math.min(5, state.speed * 0.12);
+    state.vy = 7.5 + Math.min(3.5, state.speed * 0.08);
     state.grounded = false; state.y += 0.25; spawnDust(forward, 4);
   }
   state.x += state.vx * dt; state.z += state.vz * dt; state.y += state.vy * dt;
@@ -1201,10 +1253,10 @@ function physics(dt) {
     // Stick to ribbon every frame unless a crest drops out from under the bike
     const ahead = groundAt(state.x + forward.x * 2.5, state.z + forward.z * 2.5);
     const dropAhead = targetY - ahead.y;
-    if (dropAhead > 1.35 && state.speed > 10) {
-      // Launch off jump face / tabletop lip
+    if (dropAhead > 0.85 && state.speed > 12) {
+      // Launch off whoop / small tabletop lip (heights are 1–6 now)
       state.grounded = false;
-      state.vy = Math.max(state.vy, Math.min(16, dropAhead * state.speed * 0.12));
+      state.vy = Math.max(state.vy, Math.min(9, dropAhead * state.speed * 0.14));
       state.y = targetY + 0.05;
       state.airTime += dt;
     } else {
@@ -1226,11 +1278,17 @@ function physics(dt) {
     if (state.y < targetY - 0.5) { state.y = targetY; state.vy = 0; state.grounded = true; state.airTime = 0; }
   }
 
-  const targetRoll = steer * (-0.45) - (g2.lat / 18) * 0.35;
+  // Tight lean caps — wheels stay visually down; no crazy tilt off berms
+  const targetRoll = THREE.MathUtils.clamp(steer * (-0.28) - (g2.lat / HALF_W) * 0.12, -0.32, 0.32);
   state.roll += (targetRoll - state.roll) * Math.min(1, 10 * dt);
-  const slope = groundAt(state.x + forward.x, state.z + forward.z).y - g2.y;
-  const targetPitch = THREE.MathUtils.clamp(-slope * 0.38 + (state.grounded ? 0 : state.vy * 0.015), -0.55, 0.55);
-  state.pitch += (targetPitch - state.pitch) * Math.min(1, 8 * dt);
+  state.roll = THREE.MathUtils.clamp(state.roll, -0.35, 0.35);
+  const slope = groundAt(state.x + forward.x * 1.6, state.z + forward.z * 1.6).y - g2.y;
+  const targetPitch = THREE.MathUtils.clamp(
+    -slope * 0.42 + (state.grounded ? 0 : state.vy * 0.008),
+    -0.28, 0.28
+  );
+  state.pitch += (targetPitch - state.pitch) * Math.min(1, 9 * dt);
+  state.pitch = THREE.MathUtils.clamp(state.pitch, -0.3, 0.3);
 
   for (let i = 0; i < checkpoints.length; i++) {
     const cp = checkpoints[i];
@@ -1307,19 +1365,23 @@ function syncBike(dt) {
 const camPos = new THREE.Vector3(0, 10, 18);
 const camLook = new THREE.Vector3();
 function updateCamera(dt) {
-  const back = 7.8 + state.speed * 0.1;
-  const height = 3.4 + lookPitch * 4.5;
+  // Chase cam from behind the bike (travel = -Z via yaw). Portrait phones
+  // get a slightly higher/farther framing + wider FOV so the track stays readable.
+  const portrait = innerHeight > innerWidth;
+  const back = (portrait ? 9.2 : 7.6) + state.speed * 0.11;
+  const height = (portrait ? 4.2 : 3.2) + lookPitch * (portrait ? 3.2 : 4.2);
   const yaw = state.yaw + lookYaw;
   const desired = new THREE.Vector3(
     state.x - Math.sin(yaw) * back,
     state.y + height,
     state.z + Math.cos(yaw) * back
   );
-  camPos.lerp(desired, 1 - Math.exp(-8 * dt));
+  camPos.lerp(desired, 1 - Math.exp(-9 * dt));
   camera.position.copy(camPos);
-  camLook.set(state.x, state.y + 1.35, state.z);
+  camLook.set(state.x + Math.sin(state.yaw) * 2.2, state.y + (portrait ? 1.55 : 1.25), state.z - Math.cos(state.yaw) * 2.2);
   camera.lookAt(camLook);
-  const targetFov = BASE_FOV + THREE.MathUtils.clamp(state.speed * 0.32, 0, 14);
+  const base = portrait ? BASE_FOV + 8 : BASE_FOV;
+  const targetFov = base + THREE.MathUtils.clamp(state.speed * 0.28, 0, 12);
   camera.fov += (targetFov - camera.fov) * Math.min(1, 4 * dt);
   camera.updateProjectionMatrix();
   sun.target.position.set(state.x, state.y, state.z);
