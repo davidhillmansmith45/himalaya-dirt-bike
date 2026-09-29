@@ -588,27 +588,34 @@ scene.add(buildMountains());
 }
 
 function groundAt(x, z) {
-  let bestT = 0, bestD = 1e9, bestY = 0;
-  const samples = 300;
+  // Nearest path sample in XZ — must match buildCourse mesh (pathPoint + surfaceHeight)
+  let bestT = 0, bestD = 1e9;
+  const samples = 720;
   for (let i = 0; i <= samples; i++) {
     const t = i / samples;
     const p = pathPoint(t);
     const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
-    if (d < bestD) { bestD = d; bestT = t; bestY = p.y; }
+    if (d < bestD) { bestD = d; bestT = t; }
   }
-  for (let i = -4; i <= 4; i++) {
-    const t = THREE.MathUtils.clamp(bestT + i * 0.0015, 0, 1);
-    const p = pathPoint(t);
-    const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
-    if (d < bestD) { bestD = d; bestT = t; bestY = p.y; }
+  let step = 1 / samples;
+  for (let iter = 0; iter < 10; iter++) {
+    step *= 0.5;
+    for (const dt of [-step, step]) {
+      const t = THREE.MathUtils.clamp(bestT + dt, 0, 1);
+      const p = pathPoint(t);
+      const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
+      if (d < bestD) { bestD = d; bestT = t; }
+    }
   }
   const p = pathPoint(bestT);
   const tang = pathTangent(bestT);
   const side = new THREE.Vector3(-tang.z, 0, tang.x);
+  const sideLen = side.length();
+  if (sideLen > 1e-6) side.multiplyScalar(1 / sideLen);
   const rel = new THREE.Vector3(x - p.x, 0, z - p.z);
   const lat = rel.dot(side);
   const u = Math.max(-1, Math.min(1, lat / HALF_W));
-  const y = bestY + surfaceHeight(bestT, u);
+  const y = p.y + surfaceHeight(bestT, u);
   return { y, t: bestT, lat, tang, side, onTrack: Math.abs(lat) < HALF_W * 0.58 };
 }
 
@@ -886,22 +893,39 @@ function makeBikeProcedural() {
       if (!o.isMesh || !o.geometry) return;
       o.geometry.computeBoundingBox();
       const bb = o.geometry.boundingBox;
-      for (const p of [bb.min, bb.max]) {
-        _v.copy(p).applyMatrix4(o.matrixWorld);
-        if (_v.y < minY) minY = _v.y;
+      const corners = [
+        new THREE.Vector3(bb.min.x, bb.min.y, bb.min.z),
+        new THREE.Vector3(bb.min.x, bb.min.y, bb.max.z),
+        new THREE.Vector3(bb.min.x, bb.max.y, bb.min.z),
+        new THREE.Vector3(bb.min.x, bb.max.y, bb.max.z),
+        new THREE.Vector3(bb.max.x, bb.min.y, bb.min.z),
+        new THREE.Vector3(bb.max.x, bb.min.y, bb.max.z),
+        new THREE.Vector3(bb.max.x, bb.max.y, bb.min.z),
+        new THREE.Vector3(bb.max.x, bb.max.y, bb.max.z)
+      ];
+      for (const p of corners) {
+        p.applyMatrix4(o.matrixWorld);
+        if (p.y < minY) minY = p.y;
       }
     });
     if (Number.isFinite(minY) && Math.abs(minY) > 1e-6) {
       for (const child of g.children) child.position.y -= minY;
     }
   }
-  return g;
+  // Procedural mesh is built along +X; rotate so travel is three.js forward (-Z)
+  const oriented = new THREE.Group();
+  g.rotation.y = Math.PI / 2;
+  oriented.add(g);
+  oriented.userData = g.userData;
+  oriented.userData.travelAxis = '-Z';
+  return oriented;
 }
 
 function finalizeGlbBike(gltf) {
   const root = new THREE.Group();
   const model = gltf.scene || gltf.scenes[0];
-  model.rotation.y = Math.PI / 2;
+  // GLB nose is +Z, up +Y. Map nose → three.js forward (-Z) so YXZ euler pitch/roll are correct.
+  model.rotation.y = Math.PI;
   model.scale.setScalar(0.43 / 0.35);
   model.updateMatrixWorld(true);
   const wheelNodes = [];
@@ -912,14 +936,25 @@ function finalizeGlbBike(gltf) {
     if (!o.isMesh || !o.geometry) return;
     o.geometry.computeBoundingBox();
     const bb = o.geometry.boundingBox;
-    for (const p of [bb.min, bb.max]) {
-      _v.copy(p).applyMatrix4(o.matrixWorld);
-      if (_v.y < minY) minY = _v.y;
+    const corners = [
+      new THREE.Vector3(bb.min.x, bb.min.y, bb.min.z),
+      new THREE.Vector3(bb.min.x, bb.min.y, bb.max.z),
+      new THREE.Vector3(bb.min.x, bb.max.y, bb.min.z),
+      new THREE.Vector3(bb.min.x, bb.max.y, bb.max.z),
+      new THREE.Vector3(bb.max.x, bb.min.y, bb.min.z),
+      new THREE.Vector3(bb.max.x, bb.min.y, bb.max.z),
+      new THREE.Vector3(bb.max.x, bb.max.y, bb.min.z),
+      new THREE.Vector3(bb.max.x, bb.max.y, bb.max.z)
+    ];
+    for (const p of corners) {
+      p.applyMatrix4(o.matrixWorld);
+      if (p.y < minY) minY = p.y;
     }
   });
   if (Number.isFinite(minY)) model.position.y -= minY;
   // After scale+ground, wheel bottoms are at local y=0; radius ~0.43
   root.userData.wheelRadius = 0.43;
+  root.userData.travelAxis = '-Z';
   applyPBRToObject(model);
   root.add(model);
 
@@ -934,12 +969,13 @@ function finalizeGlbBike(gltf) {
   root.userData.mixer = mixer; root.userData.wheelAction = wheelAction;
   root.userData.useClip = useClip; root.userData.rollAxis = 'x';
 
+  // Root space: travel -Z, right +X, up +Y
   const exhaustAnchor = new THREE.Object3D();
-  exhaustAnchor.position.set(-1.05, 0.4, 0.18);
+  exhaustAnchor.position.set(0.18, 0.4, 1.05);
   root.add(exhaustAnchor); root.userData.exhaustAnchor = exhaustAnchor;
 
   const headLight = new THREE.SpotLight(0xffe6b0, 1.0, 40, 0.45, 0.35);
-  headLight.position.set(1.0, 0.95, 0); headLight.target.position.set(5, 0.4, 0);
+  headLight.position.set(0, 0.95, -1.0); headLight.target.position.set(0, 0.4, -5);
   root.add(headLight); root.add(headLight.target);
   return root;
 }
@@ -950,7 +986,10 @@ scene.add(bike);
 new GLTFLoader().load('./models/dirt-bike.glb', (gltf) => {
   try {
     const loaded = finalizeGlbBike(gltf);
-    scene.remove(bike); bike = loaded; scene.add(bike); syncBike(0);
+    scene.remove(bike); bike = loaded; scene.add(bike);
+    if (!state.running) placeAtTrack(0.01);
+    else { const g = groundAt(state.x, state.z); state.y = g.y; state.grounded = true; }
+    syncBike(0);
     console.info('[bike] GLB loaded', { wheels: bike.userData.wheels.length, useClip: bike.userData.useClip });
   } catch (err) { console.warn('[bike] GLB finalize failed', err); }
 }, undefined, (err) => console.warn('[bike] GLB load failed', err));
@@ -1018,15 +1057,26 @@ addEventListener('mousemove', e => {
 });
 
 let t0 = 0;
+function placeAtTrack(t) {
+  const p = pathPoint(t);
+  const tang = pathTangent(t);
+  const gnd = groundAt(p.x, p.z);
+  state.x = p.x;
+  state.z = p.z;
+  state.y = gnd.y;
+  state.yaw = Math.atan2(tang.x, -tang.z);
+  state.pitch = 0;
+  state.roll = 0;
+  state.vx = 0; state.vy = 0; state.vz = 0;
+  state.speed = 0;
+  state.grounded = true;
+  state.airTime = 0;
+}
 function reset(fromMenu) {
-  const gnd = groundAt(5, 0);
   Object.assign(state, {
-    x: 5, z: 0, y: gnd.y,
-    vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, roll: 0,
-    speed: 0, grounded: true, airTime: 0,
     running: true, finished: false, alive: true, cp: 0, bestAir: 0, sliding: false
   });
-  state.yaw = Math.atan2(pathTangent(0.01).x, -pathTangent(0.01).z);
+  placeAtTrack(0.01);
   lookYaw = 0; lookPitch = 0.18;
   checkpoints.forEach(c => c.taken = false);
   gates.forEach(g => {
@@ -1036,6 +1086,10 @@ function reset(fromMenu) {
   document.getElementById('overlay').classList.add('hidden');
   document.getElementById('toast').textContent = '';
   t0 = performance.now();
+  syncBike(0);
+  camPos.set(state.x - Math.sin(state.yaw) * 7.8, state.y + 3.4, state.z + Math.cos(state.yaw) * 7.8);
+  camera.position.copy(camPos);
+  camera.lookAt(state.x, state.y + 1.35, state.z);
   if (!fromMenu) canvas.requestPointerLock();
 }
 document.getElementById('go').onclick = () => reset(true);
@@ -1140,15 +1194,23 @@ function physics(dt) {
     const s = maxSpd / state.speed; state.vx *= s; state.vz *= s; state.speed = maxSpd;
   }
   const g2 = groundAt(state.x, state.z);
-  // Root origin is wheel contact (meshes grounded to local y=0) — no axle offset
+  // Root origin is wheel contact (meshes grounded to local y=0) — must match track mesh Y
+  // (pathPoint + surfaceHeight), never the green base plane at y≈-38.
   const targetY = g2.y;
   if (state.grounded) {
-    // Stay planted and follow track height (incl. downhill) unless leaving a crest
-    const drop = state.y - targetY;
-    if (drop > 0.55 && state.vy <= 0) {
-      state.grounded = false; state.airTime += dt;
+    // Stick to ribbon every frame unless a crest drops out from under the bike
+    const ahead = groundAt(state.x + forward.x * 2.5, state.z + forward.z * 2.5);
+    const dropAhead = targetY - ahead.y;
+    if (dropAhead > 1.35 && state.speed > 10) {
+      // Launch off jump face / tabletop lip
+      state.grounded = false;
+      state.vy = Math.max(state.vy, Math.min(16, dropAhead * state.speed * 0.12));
+      state.y = targetY + 0.05;
+      state.airTime += dt;
     } else {
-      state.y = targetY; state.vy = 0; state.airTime = 0;
+      state.y = targetY;
+      state.vy = 0;
+      state.airTime = 0;
     }
   } else if (state.y <= targetY) {
     const impact = -state.vy;
@@ -1158,7 +1220,11 @@ function physics(dt) {
     if (impact > 28) { state.vx *= 0.4; state.vz *= 0.4; toast('Hard landing!'); }
     else if (state.airTime > 0.55) toast('Nice air!');
     state.vy = 0; state.grounded = true; state.airTime = 0;
-  } else { state.airTime += dt; }
+  } else {
+    state.airTime += dt;
+    // Safety: never sink through the ribbon into the void / green plane
+    if (state.y < targetY - 0.5) { state.y = targetY; state.vy = 0; state.grounded = true; state.airTime = 0; }
+  }
 
   const targetRoll = steer * (-0.45) - (g2.lat / 18) * 0.35;
   state.roll += (targetRoll - state.roll) * Math.min(1, 10 * dt);
@@ -1223,8 +1289,11 @@ function physics(dt) {
 function syncBike(dt) {
   if (dt == null) dt = 0.016;
   bike.position.set(state.x, state.y, state.z);
+  // Models face -Z. forward=(sin(yaw),0,-cos(yaw)) == Ry(-yaw)*(-Z), so use -yaw.
   bike.rotation.order = 'YXZ';
-  bike.rotation.y = state.yaw; bike.rotation.x = state.pitch; bike.rotation.z = state.roll;
+  bike.rotation.y = -state.yaw;
+  bike.rotation.x = state.pitch;
+  bike.rotation.z = state.roll;
   const spin = state.speed * 0.48;
   if (bike.userData.useClip && bike.userData.mixer && bike.userData.wheelAction) {
     bike.userData.wheelAction.timeScale = Math.max(0, state.speed) * 1.8;
@@ -1275,9 +1344,7 @@ addEventListener('resize', () => {
 });
 
 {
-  const gnd = groundAt(5, 0);
-  state.y = gnd.y;
-  state.yaw = Math.atan2(pathTangent(0.01).x, -pathTangent(0.01).z);
+  placeAtTrack(0.01);
   syncBike();
 }
 
