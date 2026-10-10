@@ -3762,7 +3762,7 @@ const SFX = (() => {
   };
   const env = (g, t, a, v, dur) => { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); };
   function moo(vol = 0.4) {
-    if (!ok()) return;
+    if (!ok() || vol < 0.02) return;
     const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.12, vol, 1.25); out.connect(bus);
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 650; lp.Q.value = 3; lp.connect(out);
     const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(175, t); o.frequency.linearRampToValueAtTime(205, t + 0.3); o.frequency.exponentialRampToValueAtTime(105, t + 1.2);
@@ -3770,7 +3770,7 @@ const SFX = (() => {
     o.connect(lp); o.start(t); o.stop(t + 1.3); v.start(t); v.stop(t + 1.3);
   }
   function thud(vol = 0.6) {
-    if (!ok()) return;
+    if (!ok() || vol < 0.02) return;
     const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.01, vol, 0.5); out.connect(bus);
     const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(38, t + 0.4); o.connect(out); o.start(t); o.stop(t + 0.5);
     const n = ctx.createBufferSource(); n.buffer = nbuf(); const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380; n.connect(lp); lp.connect(out); n.start(t); n.stop(t + 0.35);
@@ -3901,7 +3901,14 @@ BUF.onFallHit = (b, landed) => {
     if (hit) { b.hits.add(a); hitAIByBuffalo(a, 'direct'); }
   }
 };
-BUF.onSplat = (b) => { const v = THREE.MathUtils.clamp(1 - Math.hypot(b.x - camera.position.x, b.z - camera.position.z) / 400, 0.05, 0.85); if (v > 0.12) SFX.impact(v); else SFX.thud(v); };
+BUF.onSplat = (b) => {
+  // Only hear buffalo impacts near YOUR bike (not camera / far AI)
+  const R = 120;
+  const d = Math.hypot(b.x - state.x, b.y - state.y, b.z - state.z);
+  if (d >= R) return;
+  const v = THREE.MathUtils.clamp(1 - d / R, 0, 1);
+  if (v > 0.12) SFX.impact(v); else SFX.thud(v);
+};
 BUF.onBump = (b) => {
   if (Math.abs(b.lat || 0) > HALF_W + 2) return;
   if (state.running && !state.finished && !b.hits.has('pb')) {
@@ -4487,7 +4494,7 @@ function makeDragon(k, cfg, HUNTS) {
     b.vx = (q.x - b.x) / TF; b.vz = (q.z - b.z) / TF; b.vy = 0; b.hint = aimS;
     b.mode = 'fall'; b.hits = new Set(); b.near = false; b.stray = true;
     hunt.fall = { b, x: q.x, z: q.z, s: aimS, T: TF, t: 0 };
-    SFX.moo(sfxVol(b, 0.45)); SFX.roar(gVol(b, 1.0, 700), 1.9);
+    SFX.moo(sfxVol(b, 0.45)); SFX.roar(gVol(b, 1.0), 1.9);
     if (hunt.tg.kind === 'ai') {
       const a = hunt.tg.a;
       if (Math.random() < (a.r.skill - 0.9) * 6) { a.mistKind = 1; a.mist = 2.4; a.latT = THREE.MathUtils.clamp(a.lat + (a.lat > 0 ? -5 : 5), -9, 9); }
@@ -4498,11 +4505,21 @@ function makeDragon(k, cfg, HUNTS) {
     if (hunt && hunt.tg) HUNTS.targets.delete(T_.key(hunt.tg));
     mode = 'leave'; hunt.leaveT = 0; cooldown = 24 + Math.random() * 18;
   }
-  const sfxVol = (p, v) => v * THREE.MathUtils.clamp(1 - Math.hypot(p.x - camera.position.x, p.z - camera.position.z) / 1600, 0.12, 1);
-  // growls fall off fast (3D distance to the camera/bike): loud when the beast is right on you, silent across the valley
-  const gVol = (p, v, R = 520) => v * THREE.MathUtils.clamp(1 - Math.hypot(p.x - camera.position.x, p.y - camera.position.y, p.z - camera.position.z) / R, 0, 1);
+  // Dragon / buffalo voices: only when the acting beast is near YOUR dirt bike (not the camera, not far AI).
+  // HEAR_R ≈ 120 world units (~middle of 80–150). Mute button still silences everything.
+  const HEAR_R = 120;
+  const sfxVol = (p, v) => {
+    const d = Math.hypot(p.x - state.x, p.z - state.z);
+    if (d >= HEAR_R) return 0;
+    return v * (1 - d / HEAR_R);
+  };
+  const gVol = (p, v, R = HEAR_R) => {
+    const d = Math.hypot(p.x - state.x, (p.y != null ? p.y : state.y) - state.y, p.z - state.z);
+    if (d >= R) return 0;
+    return v * (1 - d / R);
+  };
   let growlT = 1 + Math.random() * 2;
-  const growlNear = (dt, p, v, every) => { growlT -= dt; if (growlT > 0) return; const vv = gVol(p, v, 420); if (vv > 0.06 && SFX.sinceVoice > 0.8) { SFX.growl(vv, 1.6 + Math.random() * 0.8); growlT = every * (0.8 + Math.random() * 0.5); } else growlT = 0.5; };
+  const growlNear = (dt, p, v, every) => { growlT -= dt; if (growlT > 0) return; const vv = gVol(p, v, HEAR_R); if (vv > 0.06 && SFX.sinceVoice > 0.8) { SFX.growl(vv); growlT = every * (0.8 + Math.random() * 0.5); } else growlT = 0.5; };
 
   function huntStep(dt) {
     const h = hunt; h.t += dt;
@@ -4535,7 +4552,7 @@ function makeDragon(k, cfg, HUNTS) {
         off.copy(dpos).sub(tv.set(q.x, trackY(s, lat) + H, q.z));
         const near = h.tg.kind === 'p' || Math.abs(T_.s(h.tg) - (state.s || 0)) < 350;
         if (near && state.running) toast(h.tg.kind === 'p' ? 'The ' + cfg.name.toUpperCase() + ' is on you — watch for the red ring!' : 'A dragon is hunting ' + T_.name(h.tg) + '!', 2600);
-        SFX.roar(gVol(dpos, 0.85, 700));
+        SFX.roar(gVol(dpos, 0.85));
       }
     } else if (h.phase === 'strafe') {
       growlNear(dt, dpos, 0.7, 2.6);
@@ -4551,7 +4568,7 @@ function makeDragon(k, cfg, HUNTS) {
       dpos.copy(tv);
       const TF = Math.sqrt(2 * (H - 7.5) / BUF.G);
       const tr = (h.sd - st - (VD + vt) * TF) / Math.max(10, VD + vt);
-      if (tr < 3.2 && !h.ringGrowl) { h.ringGrowl = true; SFX.growl(gVol(dpos, 0.9, 700), 2.0); growlT = 2.2; }
+      if (tr < 3.2 && !h.ringGrowl) { h.ringGrowl = true; const gv = gVol(dpos, 0.9); if (gv > 0.02) SFX.growl(gv); growlT = 2.2; }
       if (tr < 3.2) { const sl = st + vt * (Math.max(tr, 0) + TF), m = trackXZ(sl, tl); placeMarker(m.x, m.z, sl, 0.2 * (1 - Math.max(0, tr) / 3.2)); }
       if (tr <= 0 || h.sd < st + 15 || h.t > 25 || !T_.ok(h.tg)) { release(h.tg); endHunt(); }
     }
@@ -4601,13 +4618,13 @@ function makeDragon(k, cfg, HUNTS) {
     const st = T_.s(h.tg);
     h.phase = 'dive'; h.t = 0; h.p0 = dpos.clone(); h.rs = st; h.rl = THREE.MathUtils.clamp(T_.lat(h.tg), -HALF_W, HALF_W); h.vLock = T_.v(h.tg); h.locked = false;
     h.aiDodge = h.tg.kind === 'ai' && Math.random() < 0.35 + (h.tg.a.r.skill - 0.92) * 4;
-    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.9, 700), 2.4);
+    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.9), 2.4);
     if (h.tg.kind === 'p') toast('⚠ ' + short + ' IS DIVING AT YOU — STEER OUT OF THE PURPLE RING!', 2800);
     else if (nearYou(st)) toast(short + ' is diving at ' + h.tg.a.r.name + '!', 1800);
   }
   function grab(h) {
     h.phase = 'carry'; h.t = 0;
-    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.95, 700), 2.0); SFX.thud(0.5);
+    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.95), 2.0); SFX.thud(h.tg.kind === 'p' ? 0.5 : gVol(dpos, 0.5));
     const P0 = dpos.clone(), sq = trackXZ(KSTART, 0);
     const P2 = new THREE.Vector3(sq.x, groundAt(sq.x, sq.z, KSTART).y + hangH() + 8, sq.z);
     // flight line over the ridges: straight in plan, altitude kept ≥150 u above the ground under it, smoothed
@@ -4691,7 +4708,7 @@ function makeDragon(k, cfg, HUNTS) {
         h.vLock = T_.v(h.tg);
       } else {
         if (!h.locked) {                                                             // LOCK: last second, aim is committed
-          h.locked = true; SFX.growl(h.tg.kind === 'p' ? 0.95 : gVol(dpos, 0.8, 600), 1.2);
+          h.locked = true; SFX.growl(h.tg.kind === 'p' ? 0.95 : gVol(dpos, 0.8));
           if (h.aiDodge) { const a = h.tg.a; a.latT = THREE.MathUtils.clamp(a.lat + (a.lat > 0 ? -7 : 7), -10, 10); a.mistKind = 1; a.mist = 1.6; }
         }
         h.rs += h.vLock * dt + THREE.MathUtils.clamp(st - h.rs, -14 * dt, 14 * dt);   // speed changes only partly escape it; hard braking or a sidestep does
