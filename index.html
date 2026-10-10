@@ -3720,10 +3720,11 @@ function dustAt(x, y, z, n) {
 }
 
 // ---------------- synthesized sound effects (WebAudio, unlocked on the first tap/key and on START) ----------------
-// Everything is generated in code (no samples): screech, moo, thud + the monster GROWL family used by the wyverns:
-//   growl  – low, rough, throaty snarl (kidnap wyvern stalking / circling close to you)
-//   roar   – big rising monster roar (kidnap dive at you, the grab, buffalo-hunter swooping in to drop)
-//   impact – heavy, gargling crunch-growl layered on the buffalo splat
+// Everything is generated in code (no samples): moo, thud + the WOLF voice family used by the wyverns:
+//   growl   – low rumbling wolf growl (kidnap wyvern stalking / circling close to you, buffalo red-ring telegraph)
+//   roar    – bared-teeth wolf snarl + jaw snaps (kidnap dive, the grab, buffalo-hunter swooping in to drop)
+//   screech – short snarl-bark (dragon spooks a herd / swoops)
+//   impact  – thud + savage short wolf snarl on the buffalo splat
 // Master bus: gain (mute) → compressor → speakers. Mute toggle = 🔊 button (top-right) or the M key; remembered.
 const SFX = (() => {
   let ctx = null, noise = null, bus = null, comp = null, curve = null, silentEl = null;
@@ -3759,17 +3760,6 @@ const SFX = (() => {
     const w = ctx.createWaveShaper(); w.curve = curve; w.oversample = '2x'; return w;
   };
   const env = (g, t, a, v, dur) => { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); };
-  function screech(vol = 0.5) {
-    if (!ok()) return;
-    const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.06, vol, 1.6); out.connect(bus);
-    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.setValueAtTime(2200, t); bp.frequency.exponentialRampToValueAtTime(700, t + 1.5); bp.Q.value = 1.4; bp.connect(out);
-    const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = 33; lg.gain.value = 160; lfo.connect(lg);
-    for (const [type, f0, f1] of [['sawtooth', 1500, 380], ['square', 1130, 300]]) {
-      const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + 1.5); lg.connect(o.frequency); o.connect(bp); o.start(t); o.stop(t + 1.65);
-    }
-    const n = ctx.createBufferSource(); n.buffer = nbuf(); const ng = ctx.createGain(); ng.gain.value = 0.5; n.connect(ng); ng.connect(bp); n.start(t); n.stop(t + 1.6);
-    lfo.start(t); lfo.stop(t + 1.65);
-  }
   function moo(vol = 0.4) {
     if (!ok()) return;
     const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.12, vol, 1.25); out.connect(bus);
@@ -3784,63 +3774,109 @@ const SFX = (() => {
     const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(38, t + 0.4); o.connect(out); o.start(t); o.stop(t + 0.5);
     const n = ctx.createBufferSource(); n.buffer = nbuf(); const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380; n.connect(lp); lp.connect(out); n.start(t); n.stop(t + 0.35);
   }
-  // ---- the monster voice: detuned saws + sub through a tanh "throat", ragged amplitude flutter (vocal-fry rattle),
-  // pitch wobble, a sweeping formant, and a raspy breath-noise layer. p: { f, dur, rise, bright, rattle, rasp, atk }
+  // ---- WOLF voice: a sample-level glottal pulse train (jittered, shimmered, vocal-fry period doubling, irregular
+  // "chop" pulses like a real dog/wolf growl) + gated breath noise, rendered into a buffer, then shaped by a canid
+  // vocal tract (3 formant bands that open with the lips/jaw) and a touch of throat saturation.
+  // p: { f, dur, rise, fall, fry, noise, f1, f2, f3, open, atk, chop, gain }
   let lastVoice = 0;
-  function monster(vol, p) {
-    if (!ok() || vol < 0.02) return false;
-    const t = ctx.currentTime + 0.01, D = p.dur, f = p.f * (0.92 + Math.random() * 0.16);
-    const out = ctx.createGain(); out.connect(bus);
-    out.gain.setValueAtTime(0.0001, t);
-    out.gain.exponentialRampToValueAtTime(vol, t + p.atk);
-    out.gain.setValueAtTime(vol, t + D * 0.62);
-    out.gain.exponentialRampToValueAtTime(0.0001, t + D);
-    // formant chain
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 4;
-    lp.frequency.setValueAtTime(p.bright * 0.45, t); lp.frequency.exponentialRampToValueAtTime(p.bright, t + D * 0.35); lp.frequency.exponentialRampToValueAtTime(p.bright * 0.35, t + D);
-    const pk = ctx.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 420 + Math.random() * 180; pk.Q.value = 1.6; pk.gain.value = 9;
-    const am = ctx.createGain(); am.gain.value = 0.55;
-    lp.connect(pk); pk.connect(am); am.connect(out);
-    // rattle: ~22–38 Hz flutter on the amplitude (the growl), plus a slow irregular throb
-    const rl = ctx.createOscillator(); rl.type = 'square'; rl.frequency.setValueAtTime(p.rattle, t); rl.frequency.linearRampToValueAtTime(p.rattle * (0.7 + Math.random() * 0.5), t + D);
-    const rg = ctx.createGain(); rg.gain.value = 0.42; rl.connect(rg); rg.connect(am.gain);
-    const th = ctx.createOscillator(); th.frequency.value = 3 + Math.random() * 3; const tg = ctx.createGain(); tg.gain.value = 0.18; th.connect(tg); tg.connect(am.gain);
-    // throat
-    const sh = shaper(); const pre = ctx.createGain(); pre.gain.value = 0.9; pre.connect(sh); sh.connect(lp);
-    const wob = ctx.createOscillator(); wob.frequency.value = 5 + Math.random() * 4; const wg = ctx.createGain(); wg.gain.value = f * 0.06; wob.connect(wg);
-    const oscs = [];
-    for (const [type, m, g] of [['sawtooth', 1, 0.5], ['sawtooth', 1.013, 0.4], ['sawtooth', 0.497, 0.55], ['square', 1.51, 0.12]]) {
-      const o = ctx.createOscillator(); o.type = type;
-      o.frequency.setValueAtTime(f * m * 0.78, t);
-      o.frequency.exponentialRampToValueAtTime(f * m * p.rise, t + D * 0.3);
-      o.frequency.exponentialRampToValueAtTime(f * m * 0.62, t + D);
-      wg.connect(o.frequency);
-      const og = ctx.createGain(); og.gain.value = g; o.connect(og); og.connect(pre); oscs.push(o);
+  function wolfBuf(p) {
+    const sr = ctx.sampleRate, D = p.dur, N = Math.floor(sr * (D + 0.05)), buf = ctx.createBuffer(1, N, sr), d = buf.getChannelData(0);
+    const f = p.f * (0.9 + Math.random() * 0.2);
+    let next = 0, pl = 0, pa = 0, pi0 = -1, prev = 0, sub = false, gate = 0, nlp = 0, hp = 0;
+    const chopRate = p.chop * (0.85 + Math.random() * 0.3), chopPh = Math.random();
+    for (let i = 0; i < N; i++) {
+      const t = i / sr, u = Math.min(1, t / D);
+      if (i >= next) {                                             // new glottal cycle
+        const k = u < 0.28 ? u / 0.28 : 1 - (u - 0.28) / 0.72;
+        const fc = f * (u < 0.28 ? 0.82 + (p.rise - 0.82) * Math.sin(k * Math.PI / 2) : p.fall + (p.rise - p.fall) * k);
+        let per = sr / fc * (1 + (Math.random() * 2 - 1) * 0.14);  // jitter
+        pa = 0.55 + Math.random() * 0.45;                          // shimmer
+        sub = Math.random() < p.fry ? !sub : false;                // vocal fry: long/short, weak/strong alternation
+        if (sub) { per *= 1.5; pa *= 0.55; }
+        pi0 = i; pl = Math.max(8, Math.floor(per * 0.55)); next = i + Math.floor(per); gate = 1;
+      }
+      // Rosenberg glottal flow pulse (open 2/3, close 1/3), differentiated below
+      const n = i - pi0, op = pl * 0.66;
+      const g = n < op ? 0.5 * (1 - Math.cos(Math.PI * n / op)) : n < pl ? Math.cos(Math.PI / 2 * (n - op) / (pl - op)) : 0;
+      let y = (g * pa - prev) * op * 0.7; prev = g * pa;
+      // aspiration locked to the pulse + a thin constant breath
+      gate *= 0.993;
+      const wn = Math.random() * 2 - 1; nlp += (wn - nlp) * 0.5;
+      y += nlp * p.noise * (0.25 + gate);
+      const z = y - hp; hp += z * 0.003;                            // DC block
+      const c = 0.5 + 0.5 * Math.sin(2 * Math.PI * (chopRate * t + chopPh) + 1.3 * Math.sin(2 * Math.PI * 0.7 * t));
+      const chopA = 1 - p.chopDepth * (1 - c * c);
+      const e = Math.min(1, t / p.atk) * (u > 0.7 ? Math.pow(Math.max(0, 1 - (u - 0.7) / 0.3), 1.6) : 1);
+      d[i] = z * chopA * e;
     }
-    // rasp: breath noise through a moving band, also fluttered
-    const n = ctx.createBufferSource(); n.buffer = nbuf(); n.loop = true; n.playbackRate.value = 0.8 + Math.random() * 0.4;
-    const nb = ctx.createBiquadFilter(); nb.type = 'bandpass'; nb.Q.value = 0.9;
-    nb.frequency.setValueAtTime(p.bright * 0.5, t); nb.frequency.exponentialRampToValueAtTime(p.bright * 1.1, t + D * 0.35); nb.frequency.exponentialRampToValueAtTime(p.bright * 0.3, t + D);
-    const ng = ctx.createGain(); ng.gain.value = p.rasp; n.connect(nb); nb.connect(ng); ng.connect(am);
-    const end = t + D + 0.05;
-    for (const o of [...oscs, rl, th, wob]) { o.start(t); o.stop(end); }
-    n.start(t, Math.random()); n.stop(end);
+    let m = 0; for (let i = 0; i < N; i++) m = Math.max(m, Math.abs(d[i])); if (m > 0) for (let i = 0; i < N; i++) d[i] /= m;
+    return buf;
+  }
+  function wolf(vol, p, when = 0) {
+    if (!ok() || vol < 0.02) return false;
+    const t = ctx.currentTime + 0.01 + when, D = p.dur;
+    const src = ctx.createBufferSource(); src.buffer = wolfBuf(p);
+    const out = ctx.createGain(); out.gain.value = vol * (p.gain || 1); out.connect(bus);
+    const hpf = ctx.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 55; src.connect(hpf);
+    // throat grit
+    const sat = shaper(); const pre = ctx.createGain(); pre.gain.value = 0.4; hpf.connect(pre); pre.connect(sat);
+    const mix = ctx.createGain(); mix.gain.value = 0.9; mix.connect(out);
+    // chest body (low, closed-mouth rumble)
+    const body = ctx.createBiquadFilter(); body.type = 'lowpass'; body.frequency.value = 520; body.Q.value = 0.8;
+    const bg = ctx.createGain(); bg.gain.value = 0.3; sat.connect(body); body.connect(bg); bg.connect(mix);
+    // formants: lips/jaw open (p.open>1) slides F1/F2 up and brightens — the "snarl" curl
+    const fm = [[p.f1, 3.5, 1.0], [p.f2, 4.5, 0.8], [p.f3, 5, 0.45]];
+    for (const [ff, q, g] of fm) {
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = q;
+      bp.frequency.setValueAtTime(ff * 0.85, t);
+      bp.frequency.linearRampToValueAtTime(ff * p.open, t + D * 0.3);
+      bp.frequency.linearRampToValueAtTime(ff * 0.8, t + D);
+      const gg = ctx.createGain(); gg.gain.value = g * 4.5; sat.connect(bp); bp.connect(gg); gg.connect(mix);
+    }
+    src.start(t); src.stop(t + D + 0.06);
     lastVoice = performance.now();
     return true;
   }
-  const growl = (vol = 0.6, dur = 1.9) => monster(vol, { f: 58, dur, rise: 1.12, bright: 900, rattle: 27, rasp: 0.55, atk: 0.18 });
-  const roar = (vol = 0.8, dur = 2.3) => monster(vol, { f: 88, dur, rise: 1.45, bright: 2100, rattle: 34, rasp: 0.85, atk: 0.09 });
-  function impact(vol = 0.7) {             // buffalo slam: deep crunch + gargled snarl
+  // low, rumbling wolf growl (closing in / stalking / circling)
+  const growl = (vol = 0.6, dur = 1.9) => {
+    const ok1 = wolf(vol, { f: 95, dur, rise: 1.15, fall: 0.85, fry: 0.45, noise: 0.22, f1: 430, f2: 1050, f3: 2350, open: 1.12, atk: 0.12, chop: 3.6, chopDepth: 0.55 });
+    return ok1;
+  };
+  // vicious bared-teeth wolf snarl (dive / grab / buffalo strafe & release): higher, raspier, mouth wide open,
+  // with a deep growl underneath and a couple of jaw snaps at the end
+  const roar = (vol = 0.8, dur = 2.1) => {
+    if (!wolf(vol, { f: 175, dur, rise: 1.3, fall: 0.8, fry: 0.3, noise: 0.5, f1: 620, f2: 1500, f3: 2900, open: 1.35, atk: 0.05, chop: 5.2, chopDepth: 0.45 })) return false;
+    wolf(vol * 0.7, { f: 78, dur: dur * 0.95, rise: 1.1, fall: 0.85, fry: 0.5, noise: 0.2, f1: 400, f2: 980, f3: 2200, open: 1.1, atk: 0.1, chop: 3.2, chopDepth: 0.5 });
+    snap(vol * 0.55, dur * 0.82); snap(vol * 0.45, dur * 0.82 + 0.17);
+    return true;
+  };
+  // a jaw clack / snapping bite
+  function snap(vol, when = 0) {
+    if (!ok()) return;
+    const t = ctx.currentTime + 0.01 + when, n = ctx.createBufferSource(); n.buffer = nbuf();
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800 + Math.random() * 600; bp.Q.value = 2.5;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+    n.connect(bp); bp.connect(g); g.connect(bus); n.start(t, Math.random()); n.stop(t + 0.09);
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(320, t); o.frequency.exponentialRampToValueAtTime(110, t + 0.05);
+    const og = ctx.createGain(); og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(vol * 0.6, t + 0.003); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    o.connect(og); og.connect(bus); o.start(t); o.stop(t + 0.08);
+  }
+  // short warning snarl-bark (dragon spooks the herd / swoops)
+  function screech(vol = 0.5) {
+    wolf(vol, { f: 210, dur: 0.75, rise: 1.25, fall: 0.75, fry: 0.25, noise: 0.55, f1: 650, f2: 1600, f3: 3000, open: 1.3, atk: 0.02, chop: 6, chopDepth: 0.35 });
+  }
+  function impact(vol = 0.7) {             // buffalo slam: deep thud + a savage short wolf snarl
     if (!ok() || vol < 0.02) return;
     thud(Math.min(1, vol * 1.15));
-    monster(vol * 0.85, { f: 44, dur: 1.25, rise: 1.25, bright: 700, rattle: 22, rasp: 0.9, atk: 0.03 });
+    wolf(vol * 0.85, { f: 120, dur: 1.1, rise: 1.3, fall: 0.8, fry: 0.4, noise: 0.45, f1: 520, f2: 1300, f3: 2700, open: 1.3, atk: 0.03, chop: 5, chopDepth: 0.4 });
+    snap(vol * 0.5, 0.85);
   }
   function setMuted(m) {
     muted = !!m; try { localStorage.setItem('hdb-muted', muted ? '1' : '0'); } catch (e) {}
     if (bus) bus.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.03);
     const b = document.getElementById('mute'); if (b) { b.textContent = muted ? '🔇' : '🔊'; b.setAttribute('aria-pressed', muted ? 'true' : 'false'); }
   }
-  return { screech, moo, thud, growl, roar, impact, unlock, setMuted, get muted() { return muted; }, get ctx() { return ctx; }, get sinceVoice() { return (performance.now() - lastVoice) / 1000; } };
+  return { screech, snap, moo, thud, growl, roar, impact, unlock, setMuted, get muted() { return muted; }, get ctx() { return ctx; }, get sinceVoice() { return (performance.now() - lastVoice) / 1000; } };
 })();
 {
   const mb = document.getElementById('mute');
@@ -4520,7 +4556,7 @@ function makeDragon(k, cfg, HUNTS) {
         off.copy(dpos).sub(tv.set(q.x, trackY(s, lat) + H, q.z));
         const near = h.tg.kind === 'p' || Math.abs(T_.s(h.tg) - (state.s || 0)) < 350;
         if (near && state.running) toast(h.tg.kind === 'p' ? 'The ' + cfg.name.toUpperCase() + ' is on you — watch for the red ring!' : 'A dragon is hunting ' + T_.name(h.tg) + '!', 2600);
-        SFX.screech(sfxVol(dpos, 0.35)); SFX.roar(gVol(dpos, 0.85, 700));
+        SFX.roar(gVol(dpos, 0.85, 700));
       }
     } else if (h.phase === 'strafe') {
       growlNear(dt, dpos, 0.7, 2.6);
@@ -4586,7 +4622,7 @@ function makeDragon(k, cfg, HUNTS) {
     const st = T_.s(h.tg);
     h.phase = 'dive'; h.t = 0; h.p0 = dpos.clone(); h.rs = st; h.rl = THREE.MathUtils.clamp(T_.lat(h.tg), -HALF_W, HALF_W); h.vLock = T_.v(h.tg); h.locked = false;
     h.aiDodge = h.tg.kind === 'ai' && Math.random() < 0.35 + (h.tg.a.r.skill - 0.92) * 4;
-    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.9, 700), 2.4); SFX.screech(sfxVol(dpos, 0.3));
+    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.9, 700), 2.4);
     if (h.tg.kind === 'p') toast('⚠ ' + short + ' IS DIVING AT YOU — STEER OUT OF THE PURPLE RING!', 2800);
     else if (nearYou(st)) toast(short + ' is diving at ' + h.tg.a.r.name + '!', 1800);
   }
