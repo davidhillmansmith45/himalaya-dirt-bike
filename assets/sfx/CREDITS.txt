@@ -1,0 +1,16 @@
+Real animal growl / snarl recordings used for the dragon SFX (Himalaya Dirt Bike)
+
+wolf_growl.mp3
+  "wolf-growl.wav" by newagesoup — a real wolf growling (sub-bass enhanced by the author)
+  https://freesound.org/people/newagesoup/sounds/338674/
+  License: Creative Commons Attribution 3.0 (CC BY 3.0) https://creativecommons.org/licenses/by/3.0/
+  Obtained via the Stendhal (Arianne Project) lossless source, which credits the same file/licence:
+  https://github.com/arianne/stendhal/blob/master/data/sounds/lossless_sources/wolf-growl-01.flac
+  https://github.com/arianne/stendhal/blob/master/doc/sources/audio-sfx.txt
+  Changes: trimmed/faded, mono, loudness-normalised, MP3 96 kbps.
+
+dog_growl_a.mp3, dog_growl_b.mp3, snarl_a.mp3, snarl_b.mp3, snarl_c.mp3, snarl_bark.mp3
+  "Growling Snarling Dogs" by Lisa Redfern — two real dogs growling and snarling
+  https://soundbible.com/2034-Growling-Snarling-Dogs.html
+  License: Public Domain
+  Changes: cut into segments, mono, loudness-normalised, MP3 96 kbps; pitched down at runtime.
