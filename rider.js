@@ -277,7 +277,36 @@ export function makeRider(gltf, THREE, opts = {}) {
     for (const f of fingers) for (const s of ['l', 'r']) for (const j of ['01', '02', '03']) rotWorld(f + '_' + j + '_' + s, axX, -(j === '01' ? 0.75 : 0.9));
     for (const s of ['l', 'r']) { rotWorld('thumb_02_' + s, axX, -0.5); rotWorld('thumb_03_' + s, axX, -0.5); }
   }
-  return { group, update, bones, mesh, motion };
+  // ---------- on foot (summit finale): walk cycle + free-fall flail, same IK helpers, standing on y = 0
+  const loc = (n, out) => out.set(-bindP[n].x * S, bindP[n].y * S, -bindP[n].z * S);
+  const armLen = (bindP.upperarm_l.distanceTo(bindP.lowerarm_l) + bindP.lowerarm_l.distanceTo(bindP.hand_l)) * S;
+  const lF = V(), lH = V(), lS = V();
+  const L2W = (v, out) => out.copy(v).applyMatrix4(group.matrixWorld);
+  function footPose(ph, amt, dt, mode) {
+    time += dt || 0;
+    for (const n in restQ) bones[n].quaternion.copy(restQ[n]);
+    const fl = mode === 'flail';
+    const bob = fl ? 0 : (Math.abs(Math.cos(ph)) - 0.5) * 0.035 * amt;
+    inner.position.set(0, fl ? 0 : -0.035 - 0.03 * amt + bob, 0);
+    group.updateMatrixWorld(true); group.getWorldQuaternion(gq);
+    dirW(1, 0, 0, axX); dirW(0, 0, -1, axZ); dirW(0, 1, 0, axY);
+    rotWorld('spine_01', axX, fl ? 0.15 * Math.sin(ph * 0.7) : -0.06 * amt);
+    rotWorld('pelvis', axY, Math.sin(ph) * 0.08 * amt); rotWorld('spine_03', axY, -Math.sin(ph) * 0.12 * amt);
+    rotWorld('head', axX, fl ? -0.3 : 0.05);
+    for (const side of ['l', 'r']) {
+      const p = ph + (side === 'l' ? 0 : Math.PI);
+      loc('foot_' + side, lF);
+      if (fl) { lF.z += Math.sin(p * 1.3) * 0.35; lF.y += 0.25 + 0.2 * Math.cos(p); }
+      else { lF.z += -Math.sin(p) * 0.34 * amt; lF.y += Math.max(0, Math.cos(p)) * 0.11 * amt; }
+      ik('thigh_' + side, 'calf_' + side, 'foot_' + side, L2W(lF, tg), dirW(0, 0.1, -1, pole));
+      orient('foot_' + side, side === 'l' ? footDirL : footDirR, up0, dirW(0, fl ? -0.6 : -0.05 - 0.25 * Math.max(0, Math.cos(p)) * amt, -1, dA), dirW(0, 1, 0, dB));
+      loc('upperarm_' + side, lS); const sx = Math.sign(lS.x) || 1;
+      if (fl) lH.set(lS.x + sx * (0.45 + 0.15 * Math.sin(p * 1.7)), lS.y + armLen * 0.55 + 0.2 * Math.sin(p * 2.1), lS.z + 0.25 * Math.cos(p * 1.9));
+      else lH.set(lS.x + sx * 0.09, lS.y - armLen * 0.93, lS.z + Math.sin(p) * 0.24 * amt + 0.04);
+      ik('upperarm_' + side, 'lowerarm_' + side, 'hand_' + side, L2W(lH, tg), dirW(sx * 0.3, fl ? -0.5 : 0, fl ? -0.4 : 1, pole));
+    }
+  }
+  return { group, update, bones, mesh, motion, walk: (ph, amt, dt) => footPose(ph, amt, dt, 'walk'), flail: (ph, dt) => footPose(ph, 1, dt, 'flail') };
 }
 
 // MX gear material (jersey/pants/boots colours + back name/number decal); opts: { name, num, main: THREE.Color, accent: css }

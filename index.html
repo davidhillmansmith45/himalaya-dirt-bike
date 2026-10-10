@@ -71,6 +71,7 @@ button#go:active{transform:translateY(1px)}
       <span><kbd>Space</kbd> jump</span>
       <span><kbd>R</kbd> respawn</span>
     </div>
+    <button id="egGo" hidden>GET OFF · TO THE APACHES ▶</button>
     <button id="go">START RACE</button>
     <div class="credit">Imja Valley, Khumbu (Nepal) from real elevation data. Terrain: SRTM via AWS Terrain Tiles. Snow/rock tint: Sentinel-2 cloudless 2024 by EOX IT Services GmbH (CC BY-NC-SA 4.0), contains modified Copernicus Sentinel data 2024. Boulder + dirt scans: Poly Haven (CC0). Rider body: MakeHuman/MPFB via Innerscene (CC0). Wolf growl: newagesoup / Freesound (CC BY 3.0); dog snarls: Lisa Redfern / SoundBible (public domain).</div>
   </div>
@@ -84,9 +85,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { makeRider, makeGearMaterial } from './rider.js?v=m3';
+import { makeRider, makeGearMaterial } from './rider.js?v=m4';
 import { EV_S0, EV_X, EV_Z, EV_B, ALT_R0, ALT_RSTEP, ALT_R, EV_WP } from './course_everest.js?v=1';
 import { makeOutdoorEnv, makePost, contactShadow, makeGovernor } from './gfx.js?v=1';
+import { createEndgame } from './endgame.js?v=1';
 
 // Real-terrain backdrop: Khumbu / Imja valley (Dingboche -> Chukhung) + Everest massif, baked from
 // AWS Terrain Tiles (SRTM) DEM + Sentinel-2 cloudless tint. 1 world unit = 4 m.
@@ -2695,6 +2697,7 @@ const state = {
   running: false, finished: false, alive: true,
   cp: 0, bestAir: 0, sliding: false
 };
+let EG = null;   // summit finale (endgame.js): walk to the Apaches, dragon war
 const keys = Object.assign(window.__touchKeys || (window.__touchKeys = {}), {});
 addEventListener('keydown', e => {
   keys[e.code] = true;
@@ -2743,6 +2746,8 @@ function altShown(x, y) { const a = altAt(x, y); return Math.round(a + (8848 - A
 const _reported = {};
 function reportOnce(tag, e) { if (_reported[tag]) return; _reported[tag] = 1; console.error('[' + tag + '] disabled after error:', e); }
 function reset(fromMenu) {
+  try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[endgame stop]', e); }
+  { const eg = document.getElementById('egGo'); if (eg) eg.hidden = true; }
   Object.assign(state, {
     running: true, finished: false, alive: true, cp: 0, bestAir: 0, sliding: false, warnedGates: false, spin: 0, stallCd: 0,
     kidnapped: null, kidStun: 0, kidImmuneUntil: 0
@@ -2793,7 +2798,8 @@ function finish() {
   board.splice(place - 1, 0, '<b>45 YOU ' + secs + 's</b>');
   ov.querySelector('p').innerHTML = '<b>' + ord[place] + ' of ' + (AI.length + 1) + '</b> · <b>' + secs + 's</b> · ' + state.cp + '/' + checkpoints.length +
     ' gates · longest air <b>' + state.bestAir.toFixed(1) + 's</b><br><span style="font-size:.85em;opacity:.85">' + board.slice(0, 7).map((b, i) => (i + 1) + '. ' + b).join(' &nbsp; ') + '</span>';
-  ov.querySelector('button').textContent = 'RIDE AGAIN';
+  document.getElementById('go').textContent = 'RIDE AGAIN';
+  const eg = document.getElementById('egGo'); if (eg && EG) { eg.hidden = false; eg.textContent = 'GET OFF · TO THE APACHES ▶'; }
 }
 
 function spawnDust(forward, amount) {
@@ -3360,8 +3366,8 @@ function aiUpdate(dt) {
     if (racing && dt > 0 && !a.kidnapped) aiPose(a, dt);
     const d = a.root.position.distanceTo(camP);
     a.root.visible = d < (IS_MOBILE ? 200 : 300);
-    a.tag.visible = d < 90 && d > 9;
-    a.rider.visible = d < (IS_MOBILE ? 140 : 220);
+    a.tag.visible = !a.dismounted && d < 90 && d > 9;
+    a.rider.visible = !a.dismounted && d < (IS_MOBILE ? 140 : 220);
   }
 }
 
@@ -3855,7 +3861,7 @@ const SFX = (() => {
     if (bus) bus.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.03);
     const b = document.getElementById('mute'); if (b) { b.textContent = muted ? '🔇' : '🔊'; b.setAttribute('aria-pressed', muted ? 'true' : 'false'); }
   }
-  return { screech, moo, thud, growl, roar, impact, unlock, setMuted, play, get samples() { return Object.keys(S); }, get muted() { return muted; }, get ctx() { return ctx; }, get sinceVoice() { return (performance.now() - Math.max(lastVoice, voiceEnd - 800)) / 1000; } };
+  return { screech, moo, thud, growl, roar, impact, unlock, setMuted, play, get bus() { return bus; }, get samples() { return Object.keys(S); }, get muted() { return muted; }, get ctx() { return ctx; }, get sinceVoice() { return (performance.now() - Math.max(lastVoice, voiceEnd - 800)) / 1000; } };
 })();
 {
   const mb = document.getElementById('mute');
@@ -4050,6 +4056,8 @@ function taperTube(curve, n, m, r0, r1) {
   return g;
 }
 
+const DRAGON_LOD = { scale: 1 };   // >1 = coarser dragon LOD (the endgame dogfight brings all of them close)
+const X1_AXIS = new THREE.Vector3(1, 0, 0);
 function makeDragon(k, cfg, HUNTS) {
   // body frame: +z forward (head), +y up, x sideways (the two wings / legs are mirrored with sgn = ±1)
   const L = 56, NR = IS_MOBILE ? 40 : 60, NS = IS_MOBILE ? 12 : 16, NS1 = NS + 1;
@@ -4415,6 +4423,7 @@ function makeDragon(k, cfg, HUNTS) {
   let bank = 0, time = k * 1.7, spd = SPEED, mode = 'patrol', started = false, uc = 0, foldT = 1, jawA = 0, frameN = k;
   let flapW = 0.6, tuck = 0, reach = 0, phi = k * 1.9, poseOverride = null;
   const A1 = (p) => { p -= Math.floor(p); if (p < 0.55) { const e = 0.5 - 0.5 * Math.cos(Math.PI * p / 0.55); return 0.95 - 1.67 * e; } const e = 0.5 - 0.5 * Math.cos(Math.PI * (p - 0.55) / 0.45); return -0.72 + 1.67 * e; };   // shoulder elevation over one beat
+  let ext = null;   // endgame: an external controller flies this wyvern (dpos/dir) and sets its pose {w,tuck,reach,omega,roar,roll,tumble}
   let hunt = null, cooldown = cfg.kidnap ? 20 + (k - 6) * 9 + Math.random() * 5 : 9 + k * 7 + Math.random() * 4, lastPlayer = false;
   const H = 58, VD = 26, LEAD = 430;
   const th = (x, z) => terrainHeightAt ? terrainHeightAt(x, z) : 0;
@@ -4758,6 +4767,7 @@ function makeDragon(k, cfg, HUNTS) {
     beginDive(hunt);
   }
   function update(dt, camPos) {
+    if (mode === 'gone') { group.visible = false; marker.visible = false; return; }
     if (!curve) { if (terrainHeightAt) buildPath(); else return; }
     time += dt; frameN++;
     if (!started) { started = true; dpos.copy(curve.getPointAt(u)); dir.copy(curve.getTangentAt(u)); }
@@ -4800,7 +4810,7 @@ function makeDragon(k, cfg, HUNTS) {
       T.copy(curve.getPointAt(uc));
       const d = steer(T, 135, 1.0, dt, 60);
       if (d < 35) { mode = 'patrol'; u = uc; off.copy(dpos).sub(curve.getPointAt(u)); if (!(hunt && hunt.fall)) hunt = null; }
-    } // mode 'hold' (preview/test hook): stay put, keep flapping
+    } // mode 'hold' (preview/test hook): stay put, keep flapping; mode 'ext': moved by the endgame
     const fall = hunt && hunt.fall;
     if (fall) {
       fall.t += dt;
@@ -4830,7 +4840,8 @@ function makeDragon(k, cfg, HUNTS) {
       if (ph === 'dive') { const e = Math.min(1, hunt.t / KDIVE); wT = e > 0.62 ? 1 : 0; tuckT = e > 0.62 ? 0 : 1; reachT = e > 0.35 ? 1 : 0; omega = 4.8; }
       else if (ph === 'carry') { wT = 1; reachT = 1; omega = 4.7; }
       else { wT = 1; omega = 4.3; }
-    } else if (carrying) { wT = 1; reachT = 1; omega = ph === 'strafe' ? 4.2 : 4.5; }
+    } else if (mode === 'ext' && ext) { wT = ext.w != null ? ext.w : 0.9; tuckT = ext.tuck || 0; reachT = ext.reach || 0; omega = ext.omega || 4.2; }
+    else if (carrying) { wT = 1; reachT = 1; omega = ph === 'strafe' ? 4.2 : 4.5; }
     else { wT = 0.9; reachT = mode === 'hold' && hunt && hunt.buf ? 1 : 0; }
     const PO = poseOverride;
     if (PO) { if (PO.wF != null) wT = PO.wF; if (PO.tuck != null) tuckT = PO.tuck; if (PO.reach != null) reachT = PO.reach; }
@@ -4859,11 +4870,12 @@ function makeDragon(k, cfg, HUNTS) {
     m4.makeBasis(right.clone().multiplyScalar(-1), upW, f);
     group.quaternion.setFromRotationMatrix(m4);
     group.quaternion.multiply(qT.setFromAxisAngle(Z1, bank));
+    if (mode === 'ext' && ext) { if (ext.roll) group.quaternion.multiply(qT.setFromAxisAngle(Z1, ext.roll)); if (ext.tumble) group.quaternion.multiply(qT.setFromAxisAngle(X1_AXIS, ext.tumble)); }
     if ((carrying || mode === 'hold') && hunt && hunt.buf) holdBuffalo(hunt.buf);
     if (mode === 'kidnap' && hunt && (hunt.phase === 'carry' || hunt.phase === 'drop')) holdVictim(hunt.tg);
     else if (mode === 'hold' && hunt && hunt.victim) holdVictim(hunt.victim);
     // roar: jaw gapes on the dive and the strafe, and every so often on patrol
-    const roaring = (mode === 'hunt' || mode === 'kidnap') && hunt && (hunt.phase === 'dive' || hunt.phase === 'strafe' || hunt.phase === 'carry');
+    const roaring = ((mode === 'hunt' || mode === 'kidnap') && hunt && (hunt.phase === 'dive' || hunt.phase === 'strafe' || hunt.phase === 'carry')) || (mode === 'ext' && ext && ext.roar);
     const jawT = roaring ? 0.62 + 0.12 * Math.sin(time * 9) : 0.1 + 0.55 * Math.pow(Math.max(0, Math.sin(time * 0.45 + k * 1.3)), 12);
     jawA += (jawT - jawA) * Math.min(1, dt * 6); jaw.rotation.x = jawA;
     throatMat.emissiveIntensity = 0.4 + 1.6 * jawA;
@@ -4872,12 +4884,14 @@ function makeDragon(k, cfg, HUNTS) {
     if (!group.visible) return;
     // LOD: far wyverns use the one-triangle-per-panel membrane + arm-only wing bones and re-skin less often
     // (mobile is stricter); frames are staggered per dragon
-    const lo = d > (IS_MOBILE ? 700 : 1100);
-    const every = IS_MOBILE ? (d > 3000 ? 6 : d > 1200 ? 3 : 1) : (d > 2500 ? 3 : 1);
+    const dl = d * DRAGON_LOD.scale;
+    const lo = dl > (IS_MOBILE ? 700 : 1100);
+    const every = IS_MOBILE ? (dl > 3000 ? 6 : dl > 1200 ? 3 : 1) : (dl > 2500 ? 3 : 1);
     if (every > 1 && (frameN % every)) return;
     build(time, PZ, lo);
   }
   function cancel() {
+    if (mode === 'ext' || mode === 'gone') { ext = null; mode = 'patrol'; started = false; hunt = null; marker.visible = false; group.visible = true; cooldown = cfg.kidnap ? 20 + (k - 6) * 9 + Math.random() * 5 : 12 + k * 6 + Math.random() * 4; return; }
     if (hunt && hunt.kid && hunt.tg) { if (hunt.tg.kind === 'ai') hunt.tg.a.kidnapped = null; else state.kidnapped = null; KID.targets.delete(vKey(hunt.tg)); }
     if (hunt && hunt.victim) { if (hunt.victim.kind === 'ai') hunt.victim.a.kidnapped = null; else state.kidnapped = null; }
     if (hunt && hunt.buf && (hunt.buf.mode === 'carried' || hunt.buf.mode === 'look')) { hunt.buf.mode = 'graze'; hunt.buf.claimed = null; }
@@ -4888,6 +4902,11 @@ function makeDragon(k, cfg, HUNTS) {
   }
   return {
     k, cfg, group, update, cancel, startHunt, marker, head, jaw, kStart, debugDive, get kidnap() { return !!cfg.kidnap; },
+    get dir() { return dir; }, get ext() { return ext; },
+    /** endgame: hand this wyvern to an external flight controller (null = back to its patrol loop) */
+    setExt(o) { if (!o) { if (mode === 'ext' || mode === 'gone') cancel(); return; } cancel(); ext = o; mode = 'ext'; hunt = null; marker.visible = false; group.visible = true; if (!curve && terrainHeightAt) buildPath(); started = true; },
+    gone() { mode = 'gone'; group.visible = false; },
+    claw(out) { return clawPos(out); },
     get u() { return u; }, set u(v) { u = v; }, get curve() { return curve; }, get mode() { return mode; }, get hunt() { return hunt; },
     set cooldown(v) { cooldown = v; }, get cooldown() { return cooldown; }, get dpos() { return dpos; },
     /** preview hook: { wF, phase (0..1), tuck, reach } pins the flap/soar pose; null = flight-state driven */
@@ -4959,7 +4978,13 @@ const DRAGON = (() => {
 })();
 
 
-window.__game = { get gfx() { return POST; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null };
+try {
+  EG = createEndgame({ THREE, scene, camera, state, keys, AI, RIVALS, DRAGON, SFX, IS_MOBILE, toast, groundAt, pathPoint, FINISH_S, TRACK_LEN, makeNameTag, mergeGeometries, DRAGON_LOD, altShown, canvas, GLTFLoader,
+    terrainH: () => terrainHeightAt, rider: () => RIDER, aiPoseAll: () => { for (const a of AI) aiPose(a, 0); } });
+  const eg = document.getElementById('egGo');
+  if (eg) eg.onclick = () => { try { EG.start(); } catch (e) { console.error('[endgame start]', e); } };
+} catch (e) { console.error('[endgame] disabled', e); EG = null; }
+window.__game = { get EG() { return EG; }, get gfx() { return POST; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null };
 let last = performance.now();
 const _cd = new THREE.Vector3(), _shadowC = new THREE.Vector3(), _lx = new THREE.Vector3(), _ly = new THREE.Vector3();
 { _lx.crossVectors(new THREE.Vector3(0, 1, 0), TERRAIN.sun).normalize(); _ly.crossVectors(TERRAIN.sun, _lx).normalize(); }
@@ -4976,7 +5001,7 @@ function gfxUpdate(rawDt) {
   const cs = bike && bike.userData.contact;
   if (cs) { const t = state.grounded ? 1 : 0; cs.material.opacity += (cs.userData.baseOpacity * t - cs.material.opacity) * Math.min(1, rawDt * 14); }
   for (const a2 of AI) { const c2 = a2.root.userData.contact; if (c2) { const t = a2.grounded !== false ? 1 : 0; c2.material.opacity += (c2.userData.baseOpacity * t - c2.material.opacity) * Math.min(1, rawDt * 14); } }
-  GOV(rawDt, state.running);
+  GOV(rawDt, state.running || !!(EG && EG.active));
 }
 const POST = (() => { try { const P = makePost(renderer, { mobile: IS_MOBILE }); if (P) { const v = renderer.getDrawingBufferSize(new THREE.Vector2()); P.setSize(v.x, v.y); } return P; } catch (e) { console.warn('[gfx] post disabled', e); return null; } })();
 const GOV = makeGovernor(POST, renderer, (lvl) => {
@@ -4996,14 +5021,17 @@ function frame(now) {
   const dt = Math.min(0.033, (now - last) / 1000);
   last = now;
   propTime.value = now * 0.001;
-  if (!window.__game.freeze) { physics(dt); syncBike(dt); }
-  try { aiUpdate(window.__game.freeze ? 0 : dt); } catch (e) { reportOnce('ai', e); }
+  const egOn = !!(EG && EG.active);
+  if (!window.__game.freeze && !egOn) { physics(dt); syncBike(dt); }
+  try { aiUpdate(window.__game.freeze || egOn ? 0 : dt); } catch (e) { reportOnce('ai', e); }
+  if (egOn && !window.__game.freezeWorld) { try { EG.update(dt); } catch (e) { reportOnce('endgame', e); } }
   if (!window.__game.freezeWorld) {
     try { DRAGON.update(dt, camera.position); } catch (e) { reportOnce('dragon', e); }
     try { BUF.update(dt, camera.position); } catch (e) { reportOnce('buffalo', e); }
   }
   state.hitImmune = Math.max(0, (state.hitImmune || 0) - dt);
-  if (state.running) {
+  if (egOn) { /* endgame drives the camera */ }
+  else if (state.running) {
     updateCamera(dt);
     if (state.shake > 0) {
       state.shake = Math.max(0, state.shake - dt);
@@ -5021,7 +5049,7 @@ function frame(now) {
   }
   const ov = window.__game.camOverride;
   if (ov) { camera.position.set(ov[0], ov[1], ov[2]); camera.lookAt(ov[3], ov[4], ov[5]); if (ov[6]) { camera.fov = ov[6]; camera.updateProjectionMatrix(); } }
-  updateHUD();
+  if (!egOn) updateHUD();
   if (grassUpdate) grassUpdate(camera, GRASS.ms);
   try { gfxUpdate(rawDt); } catch (e) { reportOnce('gfx', e); }
   if (POST && POST.enabled && !postFailed) {
