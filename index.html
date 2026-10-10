@@ -2710,7 +2710,8 @@ const _reported = {};
 function reportOnce(tag, e) { if (_reported[tag]) return; _reported[tag] = 1; console.error('[' + tag + '] disabled after error:', e); }
 function reset(fromMenu) {
   Object.assign(state, {
-    running: true, finished: false, alive: true, cp: 0, bestAir: 0, sliding: false, warnedGates: false, spin: 0, stallCd: 0
+    running: true, finished: false, alive: true, cp: 0, bestAir: 0, sliding: false, warnedGates: false, spin: 0, stallCd: 0,
+    kidnapped: null, kidStun: 0, kidImmuneUntil: 0
   });
   placeAtTrack(11 / TRACK_LEN);
   lookYaw = 0; lookPitch = 0.18;
@@ -2804,7 +2805,9 @@ function placeSkid(forward) {
 
 function physics(dt) {
   if (!state.running || !state.alive || state.finished) return;
-  const gas = (keys.KeyW || keys.ArrowUp) ? 1 : 0;
+  if (state.kidnapped) return;   // a kidnap wyvern has you: the dragon code moves the bike
+  state.kidStun = Math.max(0, (state.kidStun || 0) - dt);
+  const gas = (keys.KeyW || keys.ArrowUp) && !(state.kidStun > 0) ? 1 : 0;
   const brake = (keys.KeyS || keys.ArrowDown) ? 1 : 0;
   // +1 = rider's RIGHT. yaw is a clockwise-from-above heading (forward = (sin yaw, 0, -cos yaw)),
   // so a right turn must INCREASE yaw. (Old code used +1 = left, i.e. three.js CCW sign -> inverted steering.)
@@ -3043,7 +3046,23 @@ function syncBike(dt) {
 
 const camPos = new THREE.Vector3(0, 10, 18);
 const camLook = new THREE.Vector3();
+const kcOff = new THREE.Vector3(), kcDes = new THREE.Vector3();
 function updateCamera(dt) {
+  if (state.kidnapped) {
+    // carried off: wide shot from behind/below the wyvern so you see the talons, the bike and the ground racing past
+    const K = state.kidnapped, fx = Math.sin(state.yaw), fz = -Math.cos(state.yaw);
+    if (!K.camInit) { K.camInit = true; kcOff.copy(camPos).sub(kcDes.set(state.x, state.y, state.z)); }
+    kcDes.set(-fx * 30 - fz * 16, 3, -fz * 30 + fx * 16);
+    kcOff.lerp(kcDes, 1 - Math.exp(-2.2 * dt));
+    camPos.set(state.x, state.y, state.z).add(kcOff);
+    if (terrainHeightAt) camPos.y = Math.max(camPos.y, terrainHeightAt(camPos.x, camPos.z) + 5);
+    camera.position.copy(camPos);
+    camera.lookAt(state.x + fx * 4, state.y + 7, state.z + fz * 4);
+    camera.fov += (BASE_FOV + 8 - camera.fov) * Math.min(1, 3 * dt); camera.updateProjectionMatrix();
+    sun.target.position.set(state.x, state.y, state.z);
+    sun.position.set(state.x, state.y, state.z).addScaledVector(TERRAIN.sun, 380);
+    return;
+  }
   // Chase cam from behind the bike (travel = -Z via yaw). Portrait phones
   // get a slightly higher/farther framing + wider FOV so the track stays readable.
   const portrait = innerHeight > innerWidth;
@@ -3197,7 +3216,7 @@ function aiReset() {
   aiFinishOrder.length = 0;
   AI.forEach((a, i) => {
     const [lat, s] = RIVAL_GRID[i];
-    Object.assign(a, { s, lat, latT: lat, spd: 0, vy: 0, grounded: true, airT: 0, finished: false, finishT: 0, mist: 0, mistKind: 0,
+    Object.assign(a, { kidnapped: null, kidImmuneUntil: 0, s, lat, latT: lat, spd: 0, vy: 0, grounded: true, airT: 0, finished: false, finishT: 0, mist: 0, mistKind: 0,
       nextMist: 25 + Math.random() * 40, react: 0.15 + Math.random() * 0.45, yaw: 0, roll: 0, pitch: 0 });
     const q = trackXZ(s, lat);
     a.y = groundAt(q.x, q.z, s).y;
@@ -3259,6 +3278,7 @@ function aiUpdate(dt) {
   if (racing && dt > 0) {
     const order = AI.slice().sort((a, b) => b.s - a.s);
     for (const a of AI) {
+      if (a.kidnapped) continue;
       if (a.react > 0) { a.react -= dt; continue; }
       if (a.finished) {
         // roll to a stop on the summit pad
@@ -3282,7 +3302,7 @@ function aiUpdate(dt) {
         // lines: each rider wanders around their own line; pass slower riders on the outside
         if (!(a.mist > 0 && a.mistKind === 1)) a.latT = THREE.MathUtils.clamp(Math.sin(a.s / 140 + a.phase) * 4.5 + Math.sin(a.s / 53 + a.phase * 2) * 1.5, -8, 8);
         const others = [];
-        for (const b of order) if (b !== a) others.push([b.s, b.lat, b.spd]);
+        for (const b of order) if (b !== a && !b.kidnapped) others.push([b.s, b.lat, b.spd]);
         if (state.running) others.push([ps, state.x !== undefined ? (groundAt(state.x, state.z, ps).lat) : 0, state.speed]);
         for (const [bs, bl, bv] of others) {
           const ds = bs - a.s;
@@ -3301,7 +3321,7 @@ function aiUpdate(dt) {
     }
   }
   for (const a of AI) {
-    if (racing && dt > 0) aiPose(a, dt);
+    if (racing && dt > 0 && !a.kidnapped) aiPose(a, dt);
     const d = a.root.position.distanceTo(camP);
     a.root.visible = d < (IS_MOBILE ? 200 : 300);
     a.tag.visible = d < 90 && d > 9;
@@ -3707,7 +3727,7 @@ const SFX = (() => {
 // ---------------- buffalo vs racers: falling buffalo hits, splat bumps (arcade: slows you, never crashes you) ----------------
 const BUFFALO_HITS = { player: 0, ai: 0, nearMiss: 0, log: [] };
 function hitPlayerByBuffalo(kind) {
-  if (state.hitImmune > 0 || !state.running || state.finished) return false;
+  if (state.hitImmune > 0 || !state.running || state.finished || state.kidnapped) return false;
   const k = kind === 'direct' ? 0.4 : 0.62;
   state.vx *= k; state.vz *= k; state.speed *= k;
   if (kind === 'direct') { state.vy = Math.max(state.vy, 6.5); state.grounded = false; state.y += 0.2; state.airTime = 0; }
@@ -3731,7 +3751,7 @@ BUF.onFallHit = (b, landed) => {
     else if (landed && dx * dx + dz * dz < 81) { b.hits.add('p'); BUFFALO_HITS.nearMiss++; toast('Close one!', 1200); }
   }
   for (const a of AI) {
-    if (a.finished || b.hits.has(a)) continue;
+    if (a.finished || a.kidnapped || b.hits.has(a)) continue;
     const p = a.root.position, dx = p.x - b.x, dz = p.z - b.z, dy = p.y + 1 - cy;
     const hit = landed ? (dx * dx + dz * dz < 9 && p.y < b.y + 2.4) : (dx * dx + dy * dy + dz * dz < 2.6 * 2.6);
     if (hit) { b.hits.add(a); hitAIByBuffalo(a, 'direct'); }
@@ -3745,7 +3765,7 @@ BUF.onBump = (b) => {
     if (dx * dx + dz * dz < 2.1 * 2.1 && state.y < b.y + 1.8) { b.hits.add('pb'); hitPlayerByBuffalo('bump'); }
   }
   for (const a of AI) {
-    if (a.finished || b.hits.has('b' + a.r.num)) continue;
+    if (a.finished || a.kidnapped || b.hits.has('b' + a.r.num)) continue;
     const p = a.root.position, dx = p.x - b.x, dz = p.z - b.z;
     if (dx * dx + dz * dz < 2.1 * 2.1 && p.y < b.y + 1.8) { b.hits.add('b' + a.r.num); hitAIByBuffalo(a, 'bump'); }
   }
@@ -3854,6 +3874,12 @@ const DRAGON_TYPES = [
   { name: 'Venom Wyvern',          back: [0.025, 0.07, 0.02], belly: [0.34, 0.32, 0.06], spike: [0.03, 0.025, 0.015], memb: [0.03, 0.05, 0.015], memb2: [0.08, 0.10, 0.025], under: [0.22, 0.25, 0.05], eye: 0x9dff1a, glowM: 0x0c1a00, size: 1.05, metal: 0.2 },
   { name: 'Bronze Wyvern',         back: [0.20, 0.09, 0.025], belly: [0.55, 0.36, 0.12], spike: [0.03, 0.022, 0.015], memb: [0.12, 0.05, 0.016], memb2: [0.22, 0.10, 0.03], under: [0.48, 0.30, 0.09], eye: 0xffe040, glowM: 0x281000, size: 1.15, metal: 0.5 },
   { name: 'Storm Wyvern',          back: [0.03, 0.035, 0.08], belly: [0.20, 0.19, 0.26], spike: [0.13, 0.13, 0.15], memb: [0.03, 0.035, 0.07], memb2: [0.07, 0.07, 0.15], under: [0.18, 0.17, 0.30], eye: 0xd040ff, glowM: 0x10041c, size: 1.1, metal: 0.3 },
+  // ---- KIDNAPPERS: these four ignore the buffalo. They stalk a racer, dive with a purple lock-on ring and, if you're
+  // still inside the ring when the talons close, carry bike + rider all the way back to the START line.
+  { name: 'Glacier Reaver',  kidnap: true, back: [0.30, 0.40, 0.50], belly: [0.65, 0.72, 0.78], spike: [0.05, 0.06, 0.08], memb: [0.12, 0.20, 0.30], memb2: [0.25, 0.35, 0.45], under: [0.55, 0.65, 0.75], eye: 0x40e0ff, glowM: 0x02121c, size: 1.25, metal: 0.25 },
+  { name: 'Shadow Talon',    kidnap: true, back: [0.06, 0.015, 0.09], belly: [0.25, 0.08, 0.30], spike: [0.12, 0.10, 0.14], memb: [0.05, 0.01, 0.08], memb2: [0.14, 0.03, 0.20], under: [0.22, 0.06, 0.28], eye: 0xff30e0, glowM: 0x1a0018, size: 1.3, metal: 0.35 },
+  { name: 'Sulfur Snatcher', kidnap: true, back: [0.30, 0.20, 0.01], belly: [0.05, 0.04, 0.02], spike: [0.02, 0.02, 0.02], memb: [0.20, 0.12, 0.005], memb2: [0.35, 0.22, 0.02], under: [0.55, 0.40, 0.04], eye: 0xff5000, glowM: 0x200800, size: 1.15, metal: 0.2 },
+  { name: 'Jade Reaver',     kidnap: true, back: [0.01, 0.12, 0.09], belly: [0.30, 0.40, 0.30], spike: [0.02, 0.03, 0.025], memb: [0.01, 0.08, 0.06], memb2: [0.04, 0.18, 0.13], under: [0.20, 0.36, 0.28], eye: 0xfff060, glowM: 0x141400, size: 1.2, metal: 0.3 },
 ];
 
 // a tube with tapering radius along a curve (horns, teeth-free spikes)
@@ -4211,7 +4237,7 @@ function makeDragon(k, cfg, HUNTS) {
   function rawLoop() {
     if (k === 0) return [[900, 300], [1700, 380], [2450, -250], [3050, -1050], [3550, -1800], [3250, -2550], [2300, -2950], [1300, -2650], [450, -1950], [-50, -1000], [250, 0]];
     // the others circle different stretches of the course: valley meadows, Kongma La, Base Camp, the Cwm, the summit
-    const fr = [0.03, 0.16, 0.38, 0.62, 0.86][k - 1] || 0.5, c = trackXZ(fr * TRACK_LEN, 0);
+    const fr = cfg.kidnap ? [0.10, 0.30, 0.52, 0.74][(k - 6) % 4] : ([0.03, 0.16, 0.38, 0.62, 0.86][k - 1] || 0.5), c = trackXZ(fr * TRACK_LEN, 0);
     const rx = 650 + 120 * (k % 3), rz = 520 + 140 * ((k + 1) % 3), n = 11, pts = [];
     for (let i = 0; i < n; i++) { const a = (k % 2 ? -1 : 1) * i / n * Math.PI * 2 + k, j = 0.85 + 0.3 * Math.abs(Math.sin(i * 2.7 + k)); pts.push([c.x + Math.cos(a) * rx * j, c.z + Math.sin(a) * rz * j]); }
     return pts;
@@ -4238,17 +4264,17 @@ function makeDragon(k, cfg, HUNTS) {
   let bank = 0, time = k * 1.7, spd = SPEED, mode = 'patrol', started = false, uc = 0, foldT = 1, jawA = 0, frameN = k;
   let flapW = 0.6, tuck = 0, reach = 0, phi = k * 1.9, poseOverride = null;
   const A1 = (p) => { p -= Math.floor(p); if (p < 0.55) { const e = 0.5 - 0.5 * Math.cos(Math.PI * p / 0.55); return 0.95 - 1.67 * e; } const e = 0.5 - 0.5 * Math.cos(Math.PI * (p - 0.55) / 0.45); return -0.72 + 1.67 * e; };   // shoulder elevation over one beat
-  let hunt = null, cooldown = 9 + k * 7 + Math.random() * 4, lastPlayer = false;
+  let hunt = null, cooldown = cfg.kidnap ? 20 + (k - 6) * 9 + Math.random() * 5 : 9 + k * 7 + Math.random() * 4, lastPlayer = false;
   const H = 58, VD = 26, LEAD = 430;
   const th = (x, z) => terrainHeightAt ? terrainHeightAt(x, z) : 0;
   const trackY = (s, lat) => { const q = trackXZ(s, lat); return groundAt(q.x, q.z, s).y; };
   // drop marker
   const marker = new THREE.Group(); marker.name = 'dropMarker' + k;
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0xff2a10, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4 });
-  const discMat = new THREE.MeshBasicMaterial({ color: 0x220400, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4 });
+  const ringMat = new THREE.MeshBasicMaterial({ color: cfg.kidnap ? 0xc040ff : 0xff2a10, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4 });
+  const discMat = new THREE.MeshBasicMaterial({ color: cfg.kidnap ? 0x0a0010 : 0x220400, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4 });
   const ring = new THREE.Mesh(new THREE.RingGeometry(3.0, 4.0, 40), ringMat), disc = new THREE.Mesh(new THREE.CircleGeometry(3.0, 32), discMat);
   ring.rotation.x = disc.rotation.x = -Math.PI / 2; ring.renderOrder = disc.renderOrder = 4;
-  const beamMat = new THREE.MeshBasicMaterial({ map: HUNTS.beamTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const beamMat = new THREE.MeshBasicMaterial({ map: cfg.kidnap ? HUNTS.beamTexK : HUNTS.beamTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 3.6, 18, 24, 1, true), beamMat); beam.position.y = 9; beam.renderOrder = 4;
   marker.add(disc, ring, beam); marker.visible = false; scene.add(marker);
   const placeMarker = (x, z, s, kk) => {
@@ -4261,15 +4287,15 @@ function makeDragon(k, cfg, HUNTS) {
     s: (t) => t.kind === 'p' ? (state.s || 0) : t.a.s,
     lat: (t) => t.kind === 'p' ? groundAt(state.x, state.z, state.s).lat : t.a.lat,
     v: (t) => t.kind === 'p' ? Math.max(0, state.vx * Math.sin(state.yaw) - state.vz * Math.cos(state.yaw)) : t.a.spd,
-    ok: (t) => t.kind === 'p' ? (state.running && !state.finished) : !t.a.finished,
+    ok: (t) => t.kind === 'p' ? (state.running && !state.finished && !state.kidnapped) : (!t.a.finished && !t.a.kidnapped),
     name: (t) => t.kind === 'p' ? 'YOU' : t.a.r.name,
     key: (t) => t.kind === 'p' ? 'p' : 'a' + t.a.r.num,
   };
   const okS = (s) => s > 80 && s < FINISH_S - 350;
   function chooseTarget() {
     const ps = state.s || 0, c = [];
-    if (state.running && !state.finished && okS(ps) && !(state.hitImmune > 0) && !HUNTS.targets.has('p')) c.push({ kind: 'p', w: lastPlayer ? 0.25 : 1.1 });
-    for (const a of AI) if (!a.finished && okS(a.s) && Math.abs(a.s - ps) < 260 && !HUNTS.targets.has('a' + a.r.num)) c.push({ kind: 'ai', a, w: 0.4 });
+    if (state.running && !state.finished && !state.kidnapped && okS(ps) && !(state.hitImmune > 0) && !HUNTS.targets.has('p')) c.push({ kind: 'p', w: lastPlayer ? 0.25 : 1.1 });
+    for (const a of AI) if (!a.finished && !a.kidnapped && okS(a.s) && Math.abs(a.s - ps) < 260 && !HUNTS.targets.has('a' + a.r.num)) c.push({ kind: 'ai', a, w: 0.4 });
     if (!c.length) return null;
     let r = Math.random() * c.reduce((x, y) => x + y.w, 0);
     for (const x of c) { r -= x.w; if (r <= 0) return x; }
@@ -4381,12 +4407,201 @@ function makeDragon(k, cfg, HUNTS) {
     }
   }
 
+  // ---- KIDNAP wyverns (cfg.kidnap). Fair-by-design arcade grab:
+  //  stalk  – fly in from behind the chosen racer, ~110 u back and 75 u up
+  //  dive   – 3.4 s swoop. A purple ring + dark talon shadow sits under the racer and slides sideways after them at only
+  //           3.2 u/s; for the last 1.0 s it LOCKS (stops following sideways and keeps the speed you had). Screech + toast.
+  //  grab   – still inside the ring (r 3.4 u) and not jumping over it when the talons close? You're taken. Otherwise: DODGED.
+  //  carry  – the wyvern hauls bike + rider over the ridges, all the way back to the START line (3.6–7.5 s flight)
+  //  drop   – released ~8 u above the start: gates reset (ride the course again), race clock keeps running,
+  //           1.3 s stunned throttle, 30 s kidnap immunity. AI riders get the same treatment and can dodge too.
+  const KID = HUNTS.kid;
+  const KDIVE = 3.4, KLOCK = 1.0, KGRAB_R = 3.4, KTRACK = 3.2, KSTART = 11;
+  const okK = (s) => s > 260 && s < FINISH_S - 300;
+  const vKey = (tg) => tg.kind === 'p' ? 'p' : 'a' + tg.a.r.num;
+  const vPos = (tg, out) => tg.kind === 'p' ? out.set(state.x, state.y, state.z) : out.copy(tg.a.root.position);
+  const kv = new THREE.Vector3(), kq = new THREE.Vector3();
+  const short = cfg.name.toUpperCase();
+  const nearYou = (s) => Math.abs(s - (state.s || 0)) < 300 && state.running;
+  function kChooseTarget() {
+    const ps = state.s || 0, c = [];
+    if (state.running && !state.finished && !state.kidnapped && okK(ps) && KID.clock > (state.kidImmuneUntil || 0) && !KID.targets.has('p') && KID.clock - KID.lastPlayer > KID.playerGap) c.push({ kind: 'p', w: 1.2 });
+    for (const a of AI) if (!a.finished && !a.kidnapped && KID.clock > (a.kidImmuneUntil || 0) && okK(a.s) && !KID.targets.has('a' + a.r.num)) c.push({ kind: 'ai', a, w: Math.abs(a.s - ps) < 320 ? 0.5 : 0.3 });
+    if (!c.length) return null;
+    let r = Math.random() * c.reduce((x, y) => x + y.w, 0);
+    for (const x of c) { r -= x.w; if (r <= 0) return x; }
+    return c[c.length - 1];
+  }
+  function kStart(tg) {
+    tg = tg || kChooseTarget(); if (!tg) return false;
+    if (mode === 'patrol') { dir.copy(curve.getTangentAt(u)); spd = SPEED; }
+    KID.targets.add(vKey(tg)); if (tg.kind === 'p') KID.lastPlayer = KID.clock;
+    hunt = { kid: true, tg, phase: 'stalk', t: 0 };
+    mode = 'kidnap'; KID.lastStart = KID.clock;
+    if (tg.kind === 'p') { toast('The ' + short + ' is stalking you…', 2000); SFX.screech(0.25); }
+    return true;
+  }
+  function kEnd(cool) {
+    if (hunt && hunt.tg) KID.targets.delete(vKey(hunt.tg));
+    mode = 'leave'; hunt = { leaveT: 0 }; cooldown = cool != null ? cool : 24 + Math.random() * 14;
+    marker.visible = false;
+  }
+  const hangH = () => Math.max(5, -footMid.y) * S + 2.2;      // body origin → talons (+ bike/rider height)
+  function beginDive(h) {
+    const st = T_.s(h.tg);
+    h.phase = 'dive'; h.t = 0; h.p0 = dpos.clone(); h.rs = st; h.rl = THREE.MathUtils.clamp(T_.lat(h.tg), -HALF_W, HALF_W); h.vLock = T_.v(h.tg); h.locked = false;
+    h.aiDodge = h.tg.kind === 'ai' && Math.random() < 0.35 + (h.tg.a.r.skill - 0.92) * 4;
+    SFX.screech(sfxVol(dpos, 0.8));
+    if (h.tg.kind === 'p') toast('⚠ ' + short + ' IS DIVING AT YOU — STEER OUT OF THE PURPLE RING!', 2800);
+    else if (nearYou(st)) toast(short + ' is diving at ' + h.tg.a.r.name + '!', 1800);
+  }
+  function grab(h) {
+    h.phase = 'carry'; h.t = 0;
+    SFX.screech(sfxVol(dpos, 0.9)); SFX.thud(0.5);
+    const P0 = dpos.clone(), sq = trackXZ(KSTART, 0);
+    const P2 = new THREE.Vector3(sq.x, groundAt(sq.x, sq.z, KSTART).y + hangH() + 8, sq.z);
+    // flight line over the ridges: straight in plan, altitude kept ≥150 u above the ground under it, smoothed
+    const N = 48, ys = [];
+    for (let i = 0; i <= N; i++) {
+      const e = i / N, x = lerp(P0.x, P2.x, e), z = lerp(P0.z, P2.z, e);
+      let m = -1e9; for (const [ox, oz] of [[0, 0], [60, 0], [-60, 0], [0, 60], [0, -60]]) m = Math.max(m, th(x + ox, z + oz));
+      ys.push(i === 0 ? P0.y : i === N ? P2.y : Math.max(lerp(P0.y, P2.y, e) + 90 * Math.sin(Math.PI * e), m + 150));
+    }
+    for (let q = 0; q < 4; q++) for (let i = 1; i < N; i++) ys[i] = Math.max(ys[i], (ys[i - 1] + ys[i + 1]) / 2);
+    h.path = new THREE.CatmullRomCurve3(ys.map((y, i) => new THREE.Vector3(lerp(P0.x, P2.x, i / N), y, lerp(P0.z, P2.z, i / N))), false, 'centripetal');
+    h.D = THREE.MathUtils.clamp(h.path.getLength() / 1300, 3.6, 7.5);
+    h.s0 = T_.s(h.tg);
+    if (h.tg.kind === 'p') {
+      state.kidnapped = { k, name: cfg.name }; state.vx = state.vy = state.vz = 0; state.speed = 0; state.grounded = false;
+      KID.kidnaps++; toast(short + ' GOT YOU! Hauling you back to the START…', h.D * 1000 + 600);
+    } else {
+      h.tg.a.kidnapped = k + 1; h.tg.a.spd = 0; KID.aiKidnaps++;
+      if (nearYou(h.s0)) toast(short + ' snatched ' + h.tg.a.r.name + '!', 1800);
+    }
+    KID.log.push((h.tg.kind === 'p' ? 'YOU' : h.tg.a.r.name) + ' taken by ' + cfg.name + ' @' + Math.round(h.s0));
+  }
+  function miss(h) {
+    if (h.tg.kind === 'p') { KID.dodges++; state.kidImmuneUntil = KID.clock + 8; toast('DODGED the ' + short + '!', 1600); }
+    else { KID.aiDodges++; h.tg.a.kidImmuneUntil = KID.clock + 8; if (nearYou(h.tg.a.s)) toast(h.tg.a.r.name + ' dodged the dragon!', 1300); }
+    KID.log.push((h.tg.kind === 'p' ? 'YOU' : h.tg.a.r.name) + ' dodged ' + cfg.name);
+    SFX.screech(sfxVol(dpos, 0.4));
+    kEnd(20 + Math.random() * 12);
+  }
+  // put the carried bike + rider in the talons
+  function holdVictim(tg) {
+    clawPos(claw);
+    const yaw = Math.atan2(fwdS.x, -fwdS.z), pitch = 0.22 * Math.sin(time * 2.1), roll = 0.3 * Math.sin(time * 2.7);
+    const y = claw.y - 1.55;
+    if (tg.kind === 'p') {
+      state.x = claw.x; state.y = y; state.z = claw.z; state.yaw = yaw; state.pitch = pitch; state.roll = roll; state.speed = 0;
+      bike.position.set(state.x, state.y, state.z); bike.rotation.set(pitch, -yaw, roll, 'YXZ');
+    } else {
+      const a = tg.a; a.y = y; a.yaw = yaw; a.pitch = pitch; a.roll = roll;
+      a.root.position.set(claw.x, y, claw.z); a.root.rotation.set(pitch, -yaw, roll);
+    }
+  }
+  function drop(h) {
+    const tg = h.tg;
+    clawPos(claw);
+    const y = claw.y - 1.55;
+    if (tg.kind === 'p') {
+      state.kidnapped = null;
+      placeAtTrack(KSTART / TRACK_LEN);
+      state.y = Math.max(state.y + 0.5, y); state.grounded = false; state.vy = 0; state.airTime = 0;
+      state.kidStun = 1.3; state.kidImmuneUntil = KID.clock + 30; state.hitImmune = 3; state.spin = 0; state.stallCd = 0;
+      // back to square one: the gates have to be ridden again (the race clock keeps running)
+      state.cp = 0; state.warnedGates = false;
+      checkpoints.forEach(c => c.taken = false);
+      gates.forEach(g => g.userData.mats.forEach(m => { m.color.setHex(0xff8a1a); m.emissive.setHex(0x662200); m.emissiveIntensity = 0.35; }));
+      camPos.set(state.x - Math.sin(state.yaw) * 14, state.y + 6, state.z + Math.cos(state.yaw) * 14);
+      toast('Dropped at the START! Gates reset — GO!', 2400);
+    } else {
+      const a = tg.a;
+      a.kidnapped = null; a.s = KSTART + Math.random() * 4; a.lat = a.latT = (Math.random() - 0.5) * 12; a.spd = 0;
+      a.y = y; a.vy = 0; a.grounded = false; a.airT = 0; a.react = 1.3; a.kidImmuneUntil = KID.clock + 22; a.mist = 0;
+    }
+    SFX.thud(sfxVol(claw, 0.6));
+    kEnd();
+  }
+  function kidStep(dt) {
+    const h = hunt; h.t += dt;
+    if (h.phase === 'stalk') {
+      if (!T_.ok(h.tg) || !okK(T_.s(h.tg))) { kEnd(6); return; }
+      const st = T_.s(h.tg), sb = Math.max(0, st - 110), q = trackXZ(sb, THREE.MathUtils.clamp(T_.lat(h.tg), -HALF_W, HALF_W));
+      T.set(q.x, groundAt(q.x, q.z, sb).y + 75, q.z);
+      const d = steer(T, 150, 1.2, dt, 40);
+      if (d < 70 || h.t > 45) beginDive(h);
+    } else if (h.phase === 'dive') {
+      if (!T_.ok(h.tg)) { kEnd(8); return; }
+      const st = T_.s(h.tg), tl = T_.lat(h.tg);
+      if (h.t < KDIVE - KLOCK) {
+        h.rs = st;                                                                   // ring rides along under the racer…
+        h.rl += THREE.MathUtils.clamp(tl - h.rl, -KTRACK * dt, KTRACK * dt);          // …but only slides sideways slowly
+        h.vLock = T_.v(h.tg);
+      } else {
+        if (!h.locked) {                                                             // LOCK: last second, aim is committed
+          h.locked = true; SFX.screech(sfxVol(dpos, 0.55));
+          if (h.aiDodge) { const a = h.tg.a; a.latT = THREE.MathUtils.clamp(a.lat + (a.lat > 0 ? -7 : 7), -10, 10); a.mistKind = 1; a.mist = 1.6; }
+        }
+        h.rs += h.vLock * dt + THREE.MathUtils.clamp(st - h.rs, -14 * dt, 14 * dt);   // speed changes only partly escape it; hard braking or a sidestep does
+      }
+      const q = trackXZ(h.rs, h.rl), gy = groundAt(q.x, q.z, h.rs).y;
+      const e = Math.min(1, h.t / KDIVE), ee = Math.pow(e, 1.7);
+      kq.set(q.x, gy + hangH(), q.z);
+      tv.lerpVectors(h.p0, kq, ee); tv.y += 18 * Math.sin(Math.PI * e) * (1 - e);
+      const mvx = tv.x - dpos.x, mvy = tv.y - dpos.y, mvz = tv.z - dpos.z, ml = Math.hypot(mvx, mvy, mvz);
+      if (ml > 1e-3) { dir.set(mvx / ml, mvy / ml, mvz / ml); spd = ml / Math.max(dt, 1e-3); }
+      if (ml < 1e-3 || Math.hypot(mvx, mvz) < 0.05) dir.copy(trackXZ(h.rs, h.rl).flat);
+      dpos.copy(tv);
+      placeMarker(q.x, q.z, h.rs, 0.25 + 0.75 * e);
+      ring.scale.setScalar(KGRAB_R / 3.5 * (h.locked ? 1 : 1 + 0.12 * Math.sin(time * 14)));
+      // no blinding column for these: a faint short glow, a darkening talon shadow, and a ring that turns solid on LOCK
+      beamMat.opacity = 0.10 + 0.22 * e; beam.scale.set(1, 0.3, 1); beam.position.y = 9 * 0.3;
+      discMat.opacity = 0.2 + 0.55 * e; ringMat.opacity = h.locked ? 0.95 : 0.55 + 0.35 * Math.abs(Math.sin(time * 9));
+      if (e >= 1) {
+        vPos(h.tg, kv);
+        const dx = kv.x - q.x, dz = kv.z - q.z;
+        marker.visible = false;
+        KID.last = { d: +Math.hypot(dx, dz).toFixed(2), dy: +(kv.y - gy).toFixed(2), rl: +h.rl.toFixed(2), tl: +tl.toFixed(2), rs: Math.round(h.rs), st: Math.round(st) };
+        if (dx * dx + dz * dz < KGRAB_R * KGRAB_R && kv.y - gy < 3.0) grab(h); else miss(h);
+      }
+    } else if (h.phase === 'carry') {
+      const e = Math.min(1, h.t / h.D), ee = e * e * (3 - 2 * e);
+      h.path.getPointAt(ee, dpos);
+      h.path.getTangentAt(Math.min(0.999, Math.max(0.001, ee)), dir);
+      spd = h.path.getLength() / h.D;
+      if (h.tg.kind === 'p') state.s = lerp(h.s0, KSTART, ee); else h.tg.a.s = lerp(h.s0, KSTART, ee);
+      if (e >= 1) { h.phase = 'drop'; h.t = 0; }
+    } else if (h.phase === 'drop') {
+      dir.y *= 0.9; dpos.y += 2 * dt;
+      if (h.t > 0.35) drop(h);
+    }
+  }
+  /** test/preview hook: start a kidnap dive on a racer right now ('p' or 'ai' + index) */
+  function debugDive(kind, ai) {
+    if (!curve && terrainHeightAt) buildPath();
+    started = true;
+    const tg = kind === 'p' ? { kind: 'p' } : { kind: 'ai', a: AI[ai || 0] };
+    if (hunt && hunt.tg) KID.targets.delete(vKey(hunt.tg));
+    KID.targets.add(vKey(tg)); hunt = { kid: true, tg, phase: 'stalk', t: 0 }; mode = 'kidnap';
+    const st = T_.s(tg), sb = Math.max(0, st - 110), q = trackXZ(sb, 0);
+    dpos.set(q.x, groundAt(q.x, q.z, sb).y + 75, q.z); dir.copy(q.flat); fwdS.copy(dir);
+    beginDive(hunt);
+  }
   function update(dt, camPos) {
     if (!curve) { if (terrainHeightAt) buildPath(); else return; }
     time += dt; frameN++;
     if (!started) { started = true; dpos.copy(curve.getPointAt(u)); dir.copy(curve.getTangentAt(u)); }
     prevPos.copy(dpos);
-    if (state.running && !state.finished && mode === 'patrol' && BUF.ready) {
+    if (cfg.kidnap) {
+      if (state.running && !state.finished && mode === 'patrol') {
+        cooldown -= dt;
+        if (cooldown <= 0) {
+          if (KID.active >= KID.max || KID.clock - KID.lastStart < KID.gap) cooldown = 2 + Math.random() * 3;
+          else if (!kStart()) cooldown = 3 + Math.random() * 2;
+        }
+      }
+    } else if (state.running && !state.finished && mode === 'patrol' && BUF.ready) {
       cooldown -= dt;
       if (cooldown <= 0) {
         if (HUNTS.active >= HUNTS.max || HUNTS.clock - HUNTS.lastStart < HUNTS.gap) cooldown = 2 + Math.random() * 3;
@@ -4400,6 +4615,8 @@ function makeDragon(k, cfg, HUNTS) {
       dir.copy(curve.getTangentAt(u)); spd = SPEED;
     } else if (mode === 'hunt') {
       huntStep(dt);
+    } else if (mode === 'kidnap') {
+      kidStep(dt);
     } else if (mode === 'leave') {
       hunt.leaveT += dt;
       T.copy(dpos).addScaledVector(tv.set(dir.x, 0, dir.z).normalize(), 300); T.y = dpos.y + 140;
@@ -4420,7 +4637,7 @@ function makeDragon(k, cfg, HUNTS) {
       fall.t += dt;
       if (fall.b.mode === 'fall') placeMarker(fall.x, fall.z, fall.s, 0.2 + 0.8 * Math.min(1, fall.t / fall.T));
       else { marker.visible = false; hunt.fall = null; if (mode === 'patrol') hunt = null; }
-    } else if (!(mode === 'hunt' && hunt && hunt.phase === 'strafe')) marker.visible = false;
+    } else if (!(mode === 'hunt' && hunt && hunt.phase === 'strafe') && !(mode === 'kidnap' && hunt && hunt.phase === 'dive')) marker.visible = false;
 
     // orientation from the motion direction
     const pf = tv.copy(fwdS);
@@ -4440,6 +4657,10 @@ function makeDragon(k, cfg, HUNTS) {
     } else if (mode === 'hunt' && ph === 'dive' && hunt.buf) {
       const dd = Math.hypot(dpos.x - hunt.buf.x, dpos.y - hunt.buf.y, dpos.z - hunt.buf.z);
       wT = dd < 70 ? 1 : 0; tuckT = dd < 70 ? 0 : 1; reachT = dd < 130 ? 1 : 0; omega = 4.6;
+    } else if (mode === 'kidnap') {
+      if (ph === 'dive') { const e = Math.min(1, hunt.t / KDIVE); wT = e > 0.62 ? 1 : 0; tuckT = e > 0.62 ? 0 : 1; reachT = e > 0.35 ? 1 : 0; omega = 4.8; }
+      else if (ph === 'carry') { wT = 1; reachT = 1; omega = 4.7; }
+      else { wT = 1; omega = 4.3; }
     } else if (carrying) { wT = 1; reachT = 1; omega = ph === 'strafe' ? 4.2 : 4.5; }
     else { wT = 0.9; reachT = mode === 'hold' && hunt && hunt.buf ? 1 : 0; }
     const PO = poseOverride;
@@ -4470,8 +4691,10 @@ function makeDragon(k, cfg, HUNTS) {
     group.quaternion.setFromRotationMatrix(m4);
     group.quaternion.multiply(qT.setFromAxisAngle(Z1, bank));
     if ((carrying || mode === 'hold') && hunt && hunt.buf) holdBuffalo(hunt.buf);
+    if (mode === 'kidnap' && hunt && (hunt.phase === 'carry' || hunt.phase === 'drop')) holdVictim(hunt.tg);
+    else if (mode === 'hold' && hunt && hunt.victim) holdVictim(hunt.victim);
     // roar: jaw gapes on the dive and the strafe, and every so often on patrol
-    const roaring = mode === 'hunt' && hunt && (hunt.phase === 'dive' || hunt.phase === 'strafe');
+    const roaring = (mode === 'hunt' || mode === 'kidnap') && hunt && (hunt.phase === 'dive' || hunt.phase === 'strafe' || hunt.phase === 'carry');
     const jawT = roaring ? 0.62 + 0.12 * Math.sin(time * 9) : 0.1 + 0.55 * Math.pow(Math.max(0, Math.sin(time * 0.45 + k * 1.3)), 12);
     jawA += (jawT - jawA) * Math.min(1, dt * 6); jaw.rotation.x = jawA;
     throatMat.emissiveIntensity = 0.4 + 1.6 * jawA;
@@ -4486,14 +4709,16 @@ function makeDragon(k, cfg, HUNTS) {
     build(time, PZ, lo);
   }
   function cancel() {
+    if (hunt && hunt.kid && hunt.tg) { if (hunt.tg.kind === 'ai') hunt.tg.a.kidnapped = null; else state.kidnapped = null; KID.targets.delete(vKey(hunt.tg)); }
+    if (hunt && hunt.victim) { if (hunt.victim.kind === 'ai') hunt.victim.a.kidnapped = null; else state.kidnapped = null; }
     if (hunt && hunt.buf && (hunt.buf.mode === 'carried' || hunt.buf.mode === 'look')) { hunt.buf.mode = 'graze'; hunt.buf.claimed = null; }
     if (hunt && hunt.tg) HUNTS.targets.delete(T_.key(hunt.tg));
-    if (mode === 'hunt' || mode === 'leave' || mode === 'hold') { hunt = { leaveT: 0 }; mode = 'leave'; }
+    if (mode === 'hunt' || mode === 'kidnap' || mode === 'leave' || mode === 'hold') { hunt = { leaveT: 0 }; mode = 'leave'; }
     else hunt = null;
-    marker.visible = false; foldT = 1; cooldown = 12 + k * 6 + Math.random() * 4;
+    marker.visible = false; foldT = 1; cooldown = cfg.kidnap ? 20 + (k - 6) * 9 + Math.random() * 5 : 12 + k * 6 + Math.random() * 4;
   }
   return {
-    k, cfg, group, update, cancel, startHunt, marker, head, jaw,
+    k, cfg, group, update, cancel, startHunt, marker, head, jaw, kStart, debugDive, get kidnap() { return !!cfg.kidnap; },
     get u() { return u; }, set u(v) { u = v; }, get curve() { return curve; }, get mode() { return mode; }, get hunt() { return hunt; },
     set cooldown(v) { cooldown = v; }, get cooldown() { return cooldown; }, get dpos() { return dpos; },
     /** preview hook: { wF, phase (0..1), tuck, reach } pins the flap/soar pose; null = flight-state driven */
@@ -4510,21 +4735,26 @@ function makeDragon(k, cfg, HUNTS) {
       if (!curve && terrainHeightAt) buildPath();
       started = true; mode = 'hold'; dpos.set(x, y, z); dir.set(dx, 0, dz).normalize(); fwdS.copy(dir); spd = 0;
       if (withBuf) { const b = BUF.all.find(b => !b.claimed && b.mode !== 'fall'); if (b) { b.mode = 'carried'; b.claimed = k + 1; hunt = { buf: b, phase: 'carry', tg: null, t: 0 }; } }
+      if (withBuf && withBuf.kind) { hunt = { victim: withBuf, phase: 'hold', t: 0 }; if (withBuf.kind === 'ai') withBuf.a.kidnapped = k + 1; else state.kidnapped = { k, name: cfg.name }; }
     },
   };
 }
 
 const DRAGON = (() => {
   const HUNTS = { active: 0, max: IS_MOBILE ? 2 : 3, gap: 6, lastStart: -99, clock: 0, targets: new Set() };
+  // kidnap scheduler: at most 1 (phone) / 2 (desktop) kidnap dives at once, ≥9 s between dives, ≥30 s between dives on YOU
+  HUNTS.kid = { active: 0, max: IS_MOBILE ? 1 : 2, gap: 9, lastStart: -99, playerGap: 30, lastPlayer: -99, clock: 0, targets: new Set(), kidnaps: 0, aiKidnaps: 0, dodges: 0, aiDodges: 0, log: [] };
+  HUNTS.beamTexK = (() => { const c = document.createElement('canvas'); c.width = 4; c.height = 64; const g = c.getContext('2d'); const gr = g.createLinearGradient(0, 0, 0, 64);
+    gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(0.55, 'rgb(50,0,90)'); gr.addColorStop(1, 'rgb(200,70,255)'); g.fillStyle = gr; g.fillRect(0, 0, 4, 64); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
   HUNTS.beamTex = (() => { const c = document.createElement('canvas'); c.width = 4; c.height = 64; const g = c.getContext('2d'); const gr = g.createLinearGradient(0, 0, 0, 64);
     gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(0.55, 'rgb(90,8,0)'); gr.addColorStop(1, 'rgb(255,40,10)'); g.fillStyle = gr; g.fillRect(0, 0, 4, 64); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
   const list = [];
   DRAGON_TYPES.forEach((cfg, k) => { try { list.push(makeDragon(k, cfg, HUNTS)); } catch (e) { reportOnce('dragon-init-' + k, e); } });
   const dead = new Set();
   function update(dt, camPos) {
-    HUNTS.clock += dt;
-    let a = 0; for (const d of list) if (d.mode === 'hunt') a++;
-    HUNTS.active = a;
+    HUNTS.clock += dt; HUNTS.kid.clock += dt;
+    let a = 0, ka = 0; for (const d of list) { if (d.mode === 'hunt') a++; else if (d.mode === 'kidnap') ka++; }
+    HUNTS.active = a; HUNTS.kid.active = ka;
     for (const d of list) {
       if (dead.has(d)) continue;
       try { d.update(dt, camPos); }
@@ -4533,11 +4763,12 @@ const DRAGON = (() => {
   }
   function cancel() {
     HUNTS.targets.clear(); HUNTS.lastStart = -99;
+    const K = HUNTS.kid; K.targets.clear(); K.lastStart = -99; K.lastPlayer = -99; K.kidnaps = K.aiKidnaps = K.dodges = K.aiDodges = 0; K.log.length = 0;
     for (const d of list) { try { d.cancel(); } catch (e) { console.warn('[dragon cancel]', e); } }
   }
   const first = list[0] || { group: null, marker: null };
   return {
-    list, HUNTS, update, cancel,
+    list, HUNTS, KID: HUNTS.kid, kidnappers: list.filter(d => d.kidnap), hunters: list.filter(d => !d.kidnap), update, cancel,
     get group() { return first.group; }, get marker() { return first.marker; }, get mode() { return first.mode; }, get hunt() { return first.hunt; }, get dpos() { return first.dpos; },
     startHunt(tg, k = 0) { return list[k] ? list[k].startHunt(tg) : false; },
     debugCarry(kind, ai, k = 0) { if (list[k]) list[k].debugCarry(kind, ai); },
