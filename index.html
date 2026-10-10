@@ -40,7 +40,8 @@ button#go:active{transform:translateY(1px)}
 #mobile .respawn{right:14px;top:14px;width:50px;height:50px;font-size:1.35rem;background:rgba(20,30,50,.45);border-color:rgba(200,220,255,.4)}
 #mobile .right{left:106px;bottom:66px}
 #mobile .jump{right:106px;bottom:108px;width:62px;height:62px;font-size:.85rem;background:rgba(40,80,140,.5);border-color:rgba(140,200,255,.45)}
-@media (hover:none),(max-width:900px){#mobile{display:block} #hint{display:none}}
+#mute{position:fixed;right:14px;top:58px;z-index:6;width:44px;height:44px;border-radius:50%;border:2px solid rgba(255,200,100,.4);background:rgba(20,14,8,.5);color:#fff;font-size:1.2rem;line-height:1;cursor:pointer;backdrop-filter:blur(5px);touch-action:none;-webkit-user-select:none;user-select:none}
+@media (hover:none),(max-width:900px){#mobile{display:block} #hint{display:none} #mute{right:74px;top:17px}}
 </style>
 </head>
 <body>
@@ -58,6 +59,7 @@ button#go:active{transform:translateY(1px)}
   <button class="btn respawn" data-k="KeyR">↺</button>
 </div>
 <div id="toast"></div>
+<button id="mute" aria-label="Sound on/off" aria-pressed="false">🔊</button>
 <div id="overlay">
   <div class="card">
     <div class="badge">MX Arcade · WebGL</div>
@@ -3717,22 +3719,49 @@ function dustAt(x, y, z, n) {
   }
 }
 
-// ---------------- little synthesized sound effects (WebAudio, unlocked on the first tap/key) ----------------
+// ---------------- synthesized sound effects (WebAudio, unlocked on the first tap/key and on START) ----------------
+// Everything is generated in code (no samples): screech, moo, thud + the monster GROWL family used by the wyverns:
+//   growl  – low, rough, throaty snarl (kidnap wyvern stalking / circling close to you)
+//   roar   – big rising monster roar (kidnap dive at you, the grab, buffalo-hunter swooping in to drop)
+//   impact – heavy, gargling crunch-growl layered on the buffalo splat
+// Master bus: gain (mute) → compressor → speakers. Mute toggle = 🔊 button (top-right) or the M key; remembered.
 const SFX = (() => {
-  let ctx = null, noise = null;
+  let ctx = null, noise = null, bus = null, comp = null, curve = null, silentEl = null;
+  let muted = false; try { muted = localStorage.getItem('hdb-muted') === '1'; } catch (e) {}
   const unlock = () => {
-    try { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch (e) { ctx = null; }
+    try {
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.knee.value = 10; comp.ratio.value = 6; comp.attack.value = 0.004; comp.release.value = 0.25;
+        bus = ctx.createGain(); bus.gain.value = muted ? 0 : 1; const trim = ctx.createGain(); trim.gain.value = 0.72; bus.connect(comp); comp.connect(trim); trim.connect(ctx.destination);
+      }
+      if (ctx.state === 'suspended' || ctx.state === 'interrupted') ctx.resume();
+      // iPhone: let Web Audio play even with the ring/silent switch on
+      try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch (e) {}
+      if (!silentEl) {
+        try {
+          silentEl = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
+          silentEl.setAttribute('playsinline', ''); silentEl.loop = false; const p = silentEl.play(); if (p && p.catch) p.catch(() => {});
+        } catch (e) {}
+      }
+    } catch (e) { ctx = null; }
   };
-  for (const ev of ['pointerdown', 'touchstart', 'keydown']) addEventListener(ev, unlock, { passive: true });
+  for (const ev of ['pointerdown', 'touchstart', 'touchend', 'keydown', 'click']) addEventListener(ev, unlock, { passive: true, capture: true });
+  addEventListener('visibilitychange', () => { if (!document.hidden && ctx && ctx.state !== 'running') { try { ctx.resume(); } catch (e) {} } });
+  const ok = () => ctx && ctx.state === 'running' && !muted;
   const nbuf = () => {
     if (noise) return noise;
-    noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); const d = noise.getChannelData(0);
+    noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate); const d = noise.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; return noise;
+  };
+  const shaper = () => {
+    if (!curve) { const n = 1024; curve = new Float32Array(n); for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; curve[i] = Math.tanh(3.2 * x); } }
+    const w = ctx.createWaveShaper(); w.curve = curve; w.oversample = '2x'; return w;
   };
   const env = (g, t, a, v, dur) => { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); };
   function screech(vol = 0.5) {
-    if (!ctx || ctx.state !== 'running') return;
-    const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.06, vol, 1.6); out.connect(ctx.destination);
+    if (!ok()) return;
+    const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.06, vol, 1.6); out.connect(bus);
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.setValueAtTime(2200, t); bp.frequency.exponentialRampToValueAtTime(700, t + 1.5); bp.Q.value = 1.4; bp.connect(out);
     const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = 33; lg.gain.value = 160; lfo.connect(lg);
     for (const [type, f0, f1] of [['sawtooth', 1500, 380], ['square', 1130, 300]]) {
@@ -3742,21 +3771,87 @@ const SFX = (() => {
     lfo.start(t); lfo.stop(t + 1.65);
   }
   function moo(vol = 0.4) {
-    if (!ctx || ctx.state !== 'running') return;
-    const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.12, vol, 1.25); out.connect(ctx.destination);
+    if (!ok()) return;
+    const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.12, vol, 1.25); out.connect(bus);
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 650; lp.Q.value = 3; lp.connect(out);
     const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(175, t); o.frequency.linearRampToValueAtTime(205, t + 0.3); o.frequency.exponentialRampToValueAtTime(105, t + 1.2);
     const v = ctx.createOscillator(), vg = ctx.createGain(); v.frequency.value = 6; vg.gain.value = 5; v.connect(vg); vg.connect(o.frequency);
     o.connect(lp); o.start(t); o.stop(t + 1.3); v.start(t); v.stop(t + 1.3);
   }
   function thud(vol = 0.6) {
-    if (!ctx || ctx.state !== 'running') return;
-    const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.01, vol, 0.5); out.connect(ctx.destination);
+    if (!ok()) return;
+    const t = ctx.currentTime, out = ctx.createGain(); env(out, t, 0.01, vol, 0.5); out.connect(bus);
     const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(38, t + 0.4); o.connect(out); o.start(t); o.stop(t + 0.5);
     const n = ctx.createBufferSource(); n.buffer = nbuf(); const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380; n.connect(lp); lp.connect(out); n.start(t); n.stop(t + 0.35);
   }
-  return { screech, moo, thud, unlock, get ctx() { return ctx; } };
+  // ---- the monster voice: detuned saws + sub through a tanh "throat", ragged amplitude flutter (vocal-fry rattle),
+  // pitch wobble, a sweeping formant, and a raspy breath-noise layer. p: { f, dur, rise, bright, rattle, rasp, atk }
+  let lastVoice = 0;
+  function monster(vol, p) {
+    if (!ok() || vol < 0.02) return false;
+    const t = ctx.currentTime + 0.01, D = p.dur, f = p.f * (0.92 + Math.random() * 0.16);
+    const out = ctx.createGain(); out.connect(bus);
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(vol, t + p.atk);
+    out.gain.setValueAtTime(vol, t + D * 0.62);
+    out.gain.exponentialRampToValueAtTime(0.0001, t + D);
+    // formant chain
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 4;
+    lp.frequency.setValueAtTime(p.bright * 0.45, t); lp.frequency.exponentialRampToValueAtTime(p.bright, t + D * 0.35); lp.frequency.exponentialRampToValueAtTime(p.bright * 0.35, t + D);
+    const pk = ctx.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 420 + Math.random() * 180; pk.Q.value = 1.6; pk.gain.value = 9;
+    const am = ctx.createGain(); am.gain.value = 0.55;
+    lp.connect(pk); pk.connect(am); am.connect(out);
+    // rattle: ~22–38 Hz flutter on the amplitude (the growl), plus a slow irregular throb
+    const rl = ctx.createOscillator(); rl.type = 'square'; rl.frequency.setValueAtTime(p.rattle, t); rl.frequency.linearRampToValueAtTime(p.rattle * (0.7 + Math.random() * 0.5), t + D);
+    const rg = ctx.createGain(); rg.gain.value = 0.42; rl.connect(rg); rg.connect(am.gain);
+    const th = ctx.createOscillator(); th.frequency.value = 3 + Math.random() * 3; const tg = ctx.createGain(); tg.gain.value = 0.18; th.connect(tg); tg.connect(am.gain);
+    // throat
+    const sh = shaper(); const pre = ctx.createGain(); pre.gain.value = 0.9; pre.connect(sh); sh.connect(lp);
+    const wob = ctx.createOscillator(); wob.frequency.value = 5 + Math.random() * 4; const wg = ctx.createGain(); wg.gain.value = f * 0.06; wob.connect(wg);
+    const oscs = [];
+    for (const [type, m, g] of [['sawtooth', 1, 0.5], ['sawtooth', 1.013, 0.4], ['sawtooth', 0.497, 0.55], ['square', 1.51, 0.12]]) {
+      const o = ctx.createOscillator(); o.type = type;
+      o.frequency.setValueAtTime(f * m * 0.78, t);
+      o.frequency.exponentialRampToValueAtTime(f * m * p.rise, t + D * 0.3);
+      o.frequency.exponentialRampToValueAtTime(f * m * 0.62, t + D);
+      wg.connect(o.frequency);
+      const og = ctx.createGain(); og.gain.value = g; o.connect(og); og.connect(pre); oscs.push(o);
+    }
+    // rasp: breath noise through a moving band, also fluttered
+    const n = ctx.createBufferSource(); n.buffer = nbuf(); n.loop = true; n.playbackRate.value = 0.8 + Math.random() * 0.4;
+    const nb = ctx.createBiquadFilter(); nb.type = 'bandpass'; nb.Q.value = 0.9;
+    nb.frequency.setValueAtTime(p.bright * 0.5, t); nb.frequency.exponentialRampToValueAtTime(p.bright * 1.1, t + D * 0.35); nb.frequency.exponentialRampToValueAtTime(p.bright * 0.3, t + D);
+    const ng = ctx.createGain(); ng.gain.value = p.rasp; n.connect(nb); nb.connect(ng); ng.connect(am);
+    const end = t + D + 0.05;
+    for (const o of [...oscs, rl, th, wob]) { o.start(t); o.stop(end); }
+    n.start(t, Math.random()); n.stop(end);
+    lastVoice = performance.now();
+    return true;
+  }
+  const growl = (vol = 0.6, dur = 1.9) => monster(vol, { f: 58, dur, rise: 1.12, bright: 900, rattle: 27, rasp: 0.55, atk: 0.18 });
+  const roar = (vol = 0.8, dur = 2.3) => monster(vol, { f: 88, dur, rise: 1.45, bright: 2100, rattle: 34, rasp: 0.85, atk: 0.09 });
+  function impact(vol = 0.7) {             // buffalo slam: deep crunch + gargled snarl
+    if (!ok() || vol < 0.02) return;
+    thud(Math.min(1, vol * 1.15));
+    monster(vol * 0.85, { f: 44, dur: 1.25, rise: 1.25, bright: 700, rattle: 22, rasp: 0.9, atk: 0.03 });
+  }
+  function setMuted(m) {
+    muted = !!m; try { localStorage.setItem('hdb-muted', muted ? '1' : '0'); } catch (e) {}
+    if (bus) bus.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.03);
+    const b = document.getElementById('mute'); if (b) { b.textContent = muted ? '🔇' : '🔊'; b.setAttribute('aria-pressed', muted ? 'true' : 'false'); }
+  }
+  return { screech, moo, thud, growl, roar, impact, unlock, setMuted, get muted() { return muted; }, get ctx() { return ctx; }, get sinceVoice() { return (performance.now() - lastVoice) / 1000; } };
 })();
+{
+  const mb = document.getElementById('mute');
+  if (mb) {
+    mb.textContent = SFX.muted ? '🔇' : '🔊';
+    const tog = (e) => { e.preventDefault(); e.stopPropagation(); SFX.unlock(); SFX.setMuted(!SFX.muted); };
+    mb.addEventListener('pointerdown', tog);
+  }
+  addEventListener('keydown', (e) => { if (e.code === 'KeyM' && !e.repeat) SFX.setMuted(!SFX.muted); });
+  document.getElementById('go')?.addEventListener('pointerdown', () => SFX.unlock(), { passive: true });
+}
 
 // ---------------- buffalo vs racers: falling buffalo hits, splat bumps (arcade: slows you, never crashes you) ----------------
 const BUFFALO_HITS = { player: 0, ai: 0, nearMiss: 0, log: [] };
@@ -3791,7 +3886,7 @@ BUF.onFallHit = (b, landed) => {
     if (hit) { b.hits.add(a); hitAIByBuffalo(a, 'direct'); }
   }
 };
-BUF.onSplat = (b) => SFX.thud(THREE.MathUtils.clamp(1 - Math.hypot(b.x - camera.position.x, b.z - camera.position.z) / 400, 0.05, 0.8));
+BUF.onSplat = (b) => { const v = THREE.MathUtils.clamp(1 - Math.hypot(b.x - camera.position.x, b.z - camera.position.z) / 400, 0.05, 0.85); if (v > 0.12) SFX.impact(v); else SFX.thud(v); };
 BUF.onBump = (b) => {
   if (Math.abs(b.lat || 0) > HALF_W + 2) return;
   if (state.running && !state.finished && !b.hits.has('pb')) {
@@ -4377,7 +4472,7 @@ function makeDragon(k, cfg, HUNTS) {
     b.vx = (q.x - b.x) / TF; b.vz = (q.z - b.z) / TF; b.vy = 0; b.hint = aimS;
     b.mode = 'fall'; b.hits = new Set(); b.near = false; b.stray = true;
     hunt.fall = { b, x: q.x, z: q.z, s: aimS, T: TF, t: 0 };
-    SFX.moo(sfxVol(b, 0.55));
+    SFX.moo(sfxVol(b, 0.45)); SFX.roar(gVol(b, 1.0, 700), 1.9);
     if (hunt.tg.kind === 'ai') {
       const a = hunt.tg.a;
       if (Math.random() < (a.r.skill - 0.9) * 6) { a.mistKind = 1; a.mist = 2.4; a.latT = THREE.MathUtils.clamp(a.lat + (a.lat > 0 ? -5 : 5), -9, 9); }
@@ -4389,6 +4484,10 @@ function makeDragon(k, cfg, HUNTS) {
     mode = 'leave'; hunt.leaveT = 0; cooldown = 24 + Math.random() * 18;
   }
   const sfxVol = (p, v) => v * THREE.MathUtils.clamp(1 - Math.hypot(p.x - camera.position.x, p.z - camera.position.z) / 1600, 0.12, 1);
+  // growls fall off fast (3D distance to the camera/bike): loud when the beast is right on you, silent across the valley
+  const gVol = (p, v, R = 520) => v * THREE.MathUtils.clamp(1 - Math.hypot(p.x - camera.position.x, p.y - camera.position.y, p.z - camera.position.z) / R, 0, 1);
+  let growlT = 1 + Math.random() * 2;
+  const growlNear = (dt, p, v, every) => { growlT -= dt; if (growlT > 0) return; const vv = gVol(p, v, 420); if (vv > 0.06 && SFX.sinceVoice > 0.8) { SFX.growl(vv, 1.6 + Math.random() * 0.8); growlT = every * (0.8 + Math.random() * 0.5); } else growlT = 0.5; };
 
   function huntStep(dt) {
     const h = hunt; h.t += dt;
@@ -4421,9 +4520,10 @@ function makeDragon(k, cfg, HUNTS) {
         off.copy(dpos).sub(tv.set(q.x, trackY(s, lat) + H, q.z));
         const near = h.tg.kind === 'p' || Math.abs(T_.s(h.tg) - (state.s || 0)) < 350;
         if (near && state.running) toast(h.tg.kind === 'p' ? 'The ' + cfg.name.toUpperCase() + ' is on you — watch for the red ring!' : 'A dragon is hunting ' + T_.name(h.tg) + '!', 2600);
-        SFX.screech(sfxVol(dpos, 0.6));
+        SFX.screech(sfxVol(dpos, 0.35)); SFX.roar(gVol(dpos, 0.85, 700));
       }
     } else if (h.phase === 'strafe') {
+      growlNear(dt, dpos, 0.7, 2.6);
       const vt = T_.v(h.tg), st = T_.s(h.tg), tl = T_.lat(h.tg);
       h.sd -= VD * dt;
       h.lat += (THREE.MathUtils.clamp(tl, -10, 10) - h.lat) * Math.min(1, dt * 0.8);
@@ -4436,6 +4536,7 @@ function makeDragon(k, cfg, HUNTS) {
       dpos.copy(tv);
       const TF = Math.sqrt(2 * (H - 7.5) / BUF.G);
       const tr = (h.sd - st - (VD + vt) * TF) / Math.max(10, VD + vt);
+      if (tr < 3.2 && !h.ringGrowl) { h.ringGrowl = true; SFX.growl(gVol(dpos, 0.9, 700), 2.0); growlT = 2.2; }
       if (tr < 3.2) { const sl = st + vt * (Math.max(tr, 0) + TF), m = trackXZ(sl, tl); placeMarker(m.x, m.z, sl, 0.2 * (1 - Math.max(0, tr) / 3.2)); }
       if (tr <= 0 || h.sd < st + 15 || h.t > 25 || !T_.ok(h.tg)) { release(h.tg); endHunt(); }
     }
@@ -4472,7 +4573,7 @@ function makeDragon(k, cfg, HUNTS) {
     KID.targets.add(vKey(tg)); if (tg.kind === 'p') KID.lastPlayer = KID.clock;
     hunt = { kid: true, tg, phase: 'stalk', t: 0 };
     mode = 'kidnap'; KID.lastStart = KID.clock;
-    if (tg.kind === 'p') { toast('The ' + short + ' is stalking you…', 2000); SFX.screech(0.25); }
+    if (tg.kind === 'p') { toast('The ' + short + ' is stalking you…', 2000); SFX.growl(0.55, 2.2); growlT = 2.4; }
     return true;
   }
   function kEnd(cool) {
@@ -4485,13 +4586,13 @@ function makeDragon(k, cfg, HUNTS) {
     const st = T_.s(h.tg);
     h.phase = 'dive'; h.t = 0; h.p0 = dpos.clone(); h.rs = st; h.rl = THREE.MathUtils.clamp(T_.lat(h.tg), -HALF_W, HALF_W); h.vLock = T_.v(h.tg); h.locked = false;
     h.aiDodge = h.tg.kind === 'ai' && Math.random() < 0.35 + (h.tg.a.r.skill - 0.92) * 4;
-    SFX.screech(sfxVol(dpos, 0.8));
+    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.9, 700), 2.4); SFX.screech(sfxVol(dpos, 0.3));
     if (h.tg.kind === 'p') toast('⚠ ' + short + ' IS DIVING AT YOU — STEER OUT OF THE PURPLE RING!', 2800);
     else if (nearYou(st)) toast(short + ' is diving at ' + h.tg.a.r.name + '!', 1800);
   }
   function grab(h) {
     h.phase = 'carry'; h.t = 0;
-    SFX.screech(sfxVol(dpos, 0.9)); SFX.thud(0.5);
+    SFX.roar(h.tg.kind === 'p' ? 1.0 : gVol(dpos, 0.95, 700), 2.0); SFX.thud(0.5);
     const P0 = dpos.clone(), sq = trackXZ(KSTART, 0);
     const P2 = new THREE.Vector3(sq.x, groundAt(sq.x, sq.z, KSTART).y + hangH() + 8, sq.z);
     // flight line over the ridges: straight in plan, altitude kept ≥150 u above the ground under it, smoothed
@@ -4518,7 +4619,7 @@ function makeDragon(k, cfg, HUNTS) {
     if (h.tg.kind === 'p') { KID.dodges++; state.kidImmuneUntil = KID.clock + 8; toast('DODGED the ' + short + '!', 1600); }
     else { KID.aiDodges++; h.tg.a.kidImmuneUntil = KID.clock + 8; if (nearYou(h.tg.a.s)) toast(h.tg.a.r.name + ' dodged the dragon!', 1300); }
     KID.log.push((h.tg.kind === 'p' ? 'YOU' : h.tg.a.r.name) + ' dodged ' + cfg.name);
-    SFX.screech(sfxVol(dpos, 0.4));
+    SFX.growl(h.tg.kind === 'p' ? 0.6 : gVol(dpos, 0.6), 1.4);
     kEnd(20 + Math.random() * 12);
   }
   // put the carried bike + rider in the talons
@@ -4564,6 +4665,7 @@ function makeDragon(k, cfg, HUNTS) {
       const st = T_.s(h.tg), sb = Math.max(0, st - 110), q = trackXZ(sb, THREE.MathUtils.clamp(T_.lat(h.tg), -HALF_W, HALF_W));
       T.set(q.x, groundAt(q.x, q.z, sb).y + 75, q.z);
       const d = steer(T, 150, 1.2, dt, 40);
+      growlNear(dt, dpos, h.tg.kind === 'p' ? 0.9 : 0.55, h.tg.kind === 'p' ? 2.4 : 3.5);
       if (d < 70 || h.t > 45) beginDive(h);
     } else if (h.phase === 'dive') {
       if (!T_.ok(h.tg)) { kEnd(8); return; }
@@ -4574,7 +4676,7 @@ function makeDragon(k, cfg, HUNTS) {
         h.vLock = T_.v(h.tg);
       } else {
         if (!h.locked) {                                                             // LOCK: last second, aim is committed
-          h.locked = true; SFX.screech(sfxVol(dpos, 0.55));
+          h.locked = true; SFX.growl(h.tg.kind === 'p' ? 0.95 : gVol(dpos, 0.8, 600), 1.2);
           if (h.aiDodge) { const a = h.tg.a; a.latT = THREE.MathUtils.clamp(a.lat + (a.lat > 0 ? -7 : 7), -10, 10); a.mistKind = 1; a.mist = 1.6; }
         }
         h.rs += h.vLock * dt + THREE.MathUtils.clamp(st - h.rs, -14 * dt, 14 * dt);   // speed changes only partly escape it; hard braking or a sidestep does
@@ -4600,6 +4702,7 @@ function makeDragon(k, cfg, HUNTS) {
         if (dx * dx + dz * dz < KGRAB_R * KGRAB_R && kv.y - gy < 3.0) grab(h); else miss(h);
       }
     } else if (h.phase === 'carry') {
+      if (h.tg.kind === 'p') growlNear(dt, dpos, 0.7, 2.2);
       const e = Math.min(1, h.t / h.D), ee = e * e * (3 - 2 * e);
       h.path.getPointAt(ee, dpos);
       h.path.getTangentAt(Math.min(0.999, Math.max(0.001, ee)), dir);
