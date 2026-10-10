@@ -1,0 +1,6 @@
+models/rider.glb
+Base body + 53-bone rig: "Human base mesh with editable 53-bone rig" by Innerscene,
+built from MakeHuman/MPFB CC0 assets, released under CC0 1.0 (public domain).
+https://www.innerscene.com/tools/library/3d-parts/human-base-mesh-with-editable-53-bone-rig-8e7c8ab1
+Modifications: welded + simplified to ~11k triangles (gltf-transform). MX gear (jersey, pants,
+boots, gloves), helmet, goggles and neck brace are generated procedurally in rider.js.

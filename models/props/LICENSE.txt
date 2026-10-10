@@ -1,0 +1,7 @@
+Boulder models in this folder are derived from Poly Haven scans, licensed CC0 1.0 (public domain):
+  namaqualand_boulder_02  https://polyhaven.com/a/namaqualand_boulder_02
+  namaqualand_boulder_03  https://polyhaven.com/a/namaqualand_boulder_03
+  namaqualand_boulder_05  https://polyhaven.com/a/namaqualand_boulder_05
+Processing: welded, decimated (gltf-transform), textures resized to 512 px; *_lo / *_xs are
+geometry-only LODs that reuse the full model's textures. Tinted grey in-game to match Khumbu granite.
+Scrub, mani wall, chorten, prayer flags, course furniture: procedural (this project).

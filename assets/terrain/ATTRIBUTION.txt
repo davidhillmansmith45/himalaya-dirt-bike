@@ -1,0 +1,22 @@
+Himalaya MX terrain data (Imja Valley / Khumbu, Nepal; 1 world unit = 4 m, heights x1.3)
+
+Elevation: AWS Terrain Tiles (Mapzen terrarium encoding), derived from SRTM (NASA/USGS)
+  https://registry.opendata.aws/terrain-tiles/
+
+Colour/snow tint: Sentinel-2 cloudless 2024 - https://s2maps.eu by EOX IT Services GmbH
+  (Contains modified Copernicus Sentinel data 2024). Licence: CC BY-NC-SA 4.0.
+  The baked textures in this folder are derivative works under the same licence
+  (non-commercial, share-alike).
+
+Shading, snow distribution, shadows and AO are computed procedurally from the DEM.
+
+Rock/snow micro-detail (rock_detail.jpg, snow_detail.jpg, repacked luminance + normal):
+  Poly Haven, CC0 1.0 (public domain) - https://polyhaven.com
+  - "Marble Cliff 05" by Amal Kumar  https://polyhaven.com/a/marble_cliff_05
+  - "Snow Field Aerial" by Rob Tuytel https://polyhaven.com/a/snow_field_aerial
+clouds.jpg (cloud-shadow noise) is procedurally generated for this project.
+
+v2 terrain (Oct 2026): near_/far_ alb (albedo), nrm (normal xz + AO), aux (sun shadow,
+snow mask, ice mask) are baked from the DEM with flow-accumulation gully carving,
+wind-lee snow loading and strata banding, tinted by the Sentinel-2 imagery above.
+
