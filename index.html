@@ -3751,12 +3751,14 @@ BUF.onBump = (b) => {
   }
 };
 
-// ---------------- The dragons of the Khumbu: SIX procedural, wing-flapping dragons hunting buffalo ----------------
-// Body = a tapered, UV-mapped tube along an undulating spine (rebuilt each frame) wearing a generated scale texture
-// (albedo + normal + roughness), dorsal spikes, tucked legs and a tail spade; a sculpted head on the neck with an
-// animated roaring jaw, rows of teeth, swept horns, angry brow ridges and glowing slit-pupil eyes; bat wings = arm +
-// four finger bones with veined, translucent membranes whose trailing edges are torn. Each dragon patrols its own
-// loop over the ridges; a shared scheduler staggers their hunts (max 2–3 at once) so drops come in waves, not a swarm.
+// ---------------- The wyverns of the Khumbu: SIX procedural wyverns hunting buffalo ----------------
+// Rebuilt from the user's reference clip (realistic fantasy wyvern, "Flap & Soar blend"): two hind legs, the wings ARE
+// the front limbs (humerus → forearm → hooked wrist claw → four finger bones, leathery membrane running back to the
+// hips, lighter tan underside), a deep keel chest with ribbed belly plates, rough dorsal scales and a spike ridge from
+// the horned crown down to a spiked tail paddle. Procedural animation: heavy scooping downstroke with the hand lagging
+// the arm, folded upstroke, chest heaving against the wings, a travelling wave down the spine/tail with follow-through,
+// a gimbal-steady head on an S-neck, and hind legs that hang and bob (and reach to grab). Flight state drives the
+// flap↔soar blend. A shared scheduler staggers their hunts (max 2–3 at once) so drops come in waves, not a swarm.
 const DRAGON_TEX = (() => { try {
   const S = IS_MOBILE ? 256 : 512;
   const hash = (x, y) => { const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return h - Math.floor(h); };
@@ -3843,14 +3845,15 @@ const DRAGON_TEX = (() => { try {
   return { alb: mkTex(alb, true), nrm: mkTex(nrm, false), rgh: mkTex(rgh, false), memb: mkTex(mb, true), glow };
 } catch (e) { reportOnce('dragon-tex', e); return null; } })();
 
-// palettes (linear colours): back, belly, spikes/horns, membrane, membrane veins/edge, eye
+// palettes (linear colours): back, belly, spikes/horns/talons, wing membrane (dorsal), membrane trailing edge,
+// membrane UNDERSIDE (lighter, like the reference's tan wing undersides), eye. One wyvern base, six colourways.
 const DRAGON_TYPES = [
-  { name: 'Crimson Khumbu Wyrm', back: [0.30, 0.018, 0.016], belly: [0.42, 0.24, 0.07], spike: [0.035, 0.02, 0.016], memb: [0.16, 0.018, 0.016], memb2: [0.30, 0.05, 0.03], eye: 0xffa010, glowM: 0x3a0400, size: 1.2, metal: 0.25 },
-  { name: 'Obsidian Wyrm',       back: [0.016, 0.015, 0.018], belly: [0.12, 0.025, 0.012], spike: [0.12, 0.10, 0.08], memb: [0.03, 0.02, 0.022], memb2: [0.10, 0.02, 0.012], eye: 0xff2200, glowM: 0x2a0200, size: 1.35, metal: 0.4 },
-  { name: 'Ashbone Wyrm',        back: [0.30, 0.29, 0.27], belly: [0.20, 0.18, 0.15], spike: [0.05, 0.045, 0.04], memb: [0.20, 0.17, 0.16], memb2: [0.30, 0.22, 0.2], eye: 0x58d8ff, glowM: 0x081820, size: 1.0, metal: 0.1 },
-  { name: 'Venom Wyrm',          back: [0.022, 0.08, 0.025], belly: [0.20, 0.22, 0.05], spike: [0.03, 0.025, 0.015], memb: [0.04, 0.07, 0.02], memb2: [0.12, 0.15, 0.03], eye: 0x9dff1a, glowM: 0x0c1a00, size: 1.05, metal: 0.2 },
-  { name: 'Bronze Wyrm',         back: [0.22, 0.10, 0.03], belly: [0.40, 0.27, 0.10], spike: [0.03, 0.022, 0.015], memb: [0.17, 0.07, 0.025], memb2: [0.32, 0.14, 0.04], eye: 0xffe040, glowM: 0x281000, size: 1.15, metal: 0.55 },
-  { name: 'Storm Wyrm',          back: [0.03, 0.035, 0.09], belly: [0.11, 0.10, 0.16], spike: [0.13, 0.13, 0.15], memb: [0.04, 0.045, 0.09], memb2: [0.09, 0.08, 0.2], eye: 0xd040ff, glowM: 0x10041c, size: 1.1, metal: 0.3 },
+  { name: 'Crimson Khumbu Wyvern', back: [0.17, 0.042, 0.02], belly: [0.52, 0.26, 0.09], spike: [0.035, 0.02, 0.014], memb: [0.10, 0.024, 0.013], memb2: [0.17, 0.05, 0.022], under: [0.50, 0.23, 0.08], eye: 0xffa010, glowM: 0x2a0500, size: 1.2, metal: 0.18 },
+  { name: 'Obsidian Wyvern',       back: [0.02, 0.018, 0.02], belly: [0.22, 0.06, 0.02], spike: [0.10, 0.09, 0.08], memb: [0.025, 0.018, 0.018], memb2: [0.07, 0.02, 0.012], under: [0.17, 0.05, 0.02], eye: 0xff2200, glowM: 0x220200, size: 1.35, metal: 0.4 },
+  { name: 'Ashbone Wyvern',        back: [0.22, 0.20, 0.18], belly: [0.42, 0.38, 0.30], spike: [0.05, 0.045, 0.04], memb: [0.13, 0.11, 0.10], memb2: [0.20, 0.16, 0.14], under: [0.40, 0.34, 0.27], eye: 0x58d8ff, glowM: 0x081820, size: 1.0, metal: 0.1 },
+  { name: 'Venom Wyvern',          back: [0.025, 0.07, 0.02], belly: [0.34, 0.32, 0.06], spike: [0.03, 0.025, 0.015], memb: [0.03, 0.05, 0.015], memb2: [0.08, 0.10, 0.025], under: [0.22, 0.25, 0.05], eye: 0x9dff1a, glowM: 0x0c1a00, size: 1.05, metal: 0.2 },
+  { name: 'Bronze Wyvern',         back: [0.20, 0.09, 0.025], belly: [0.55, 0.36, 0.12], spike: [0.03, 0.022, 0.015], memb: [0.12, 0.05, 0.016], memb2: [0.22, 0.10, 0.03], under: [0.48, 0.30, 0.09], eye: 0xffe040, glowM: 0x281000, size: 1.15, metal: 0.5 },
+  { name: 'Storm Wyvern',          back: [0.03, 0.035, 0.08], belly: [0.20, 0.19, 0.26], spike: [0.13, 0.13, 0.15], memb: [0.03, 0.035, 0.07], memb2: [0.07, 0.07, 0.15], under: [0.18, 0.17, 0.30], eye: 0xd040ff, glowM: 0x10041c, size: 1.1, metal: 0.3 },
 ];
 
 // a tube with tapering radius along a curve (horns, teeth-free spikes)
@@ -3871,43 +3874,21 @@ function taperTube(curve, n, m, r0, r1) {
 }
 
 function makeDragon(k, cfg, HUNTS) {
-  const L = 58, NR = IS_MOBILE ? 34 : 56, NS = IS_MOBILE ? 10 : 14, NS1 = NS + 1;
-  const radius = (u) => 1.45 * radius0(u);
-  const radius0 = (u) => {
-    // tail tip -> tail -> body -> neck (head is a separate sculpted mesh on the last ring)
-    if (u < 0.42) return 0.12 + 2.1 * Math.pow(u / 0.42, 1.9);
-    if (u < 0.66) return 2.22 + 0.45 * Math.sin((u - 0.42) / 0.24 * Math.PI);
-    if (u < 0.86) return 2.22 - 1.25 * smooth01(u, 0.66, 0.84);
-    return 0.97 + 0.1 * smooth01(u, 0.9, 1.0);
+  // body frame: +z forward (head), +y up, x sideways (the two wings / legs are mirrored with sgn = ±1)
+  const L = 56, NR = IS_MOBILE ? 40 : 60, NS = IS_MOBILE ? 12 : 16, NS1 = NS + 1;
+  const iS = Math.round(0.655 * (NR - 1)), iH = Math.round(0.53 * (NR - 1)), iM = Math.round(0.47 * (NR - 1));
+  const radius = (u) => {
+    if (u < 0.46) return 0.16 + 1.62 * Math.pow(u / 0.46, 1.55);                 // long whip tail
+    if (u < 0.56) return 1.78 + 0.5 * smooth01(u, 0.46, 0.56);                   // hips
+    if (u < 0.72) return 2.28 + 0.42 * Math.sin((u - 0.56) / 0.16 * Math.PI);    // deep keel chest (flight muscle)
+    if (u < 0.86) return 2.28 - 1.05 * smooth01(u, 0.72, 0.86);                  // thick neck
+    return 1.23 - 0.1 * smooth01(u, 0.86, 1.0);
   };
-  const SPK = [];                       // dorsal spikes: ring index, height
-  for (let i = 3; i < NR - 2; i += (IS_MOBILE ? 1 : 2)) { const u = i / (NR - 1); SPK.push([i, (u > 0.84 ? 0.9 : 1.2 + 1.6 * Math.sin(u * Math.PI)) * (IS_MOBILE ? 0.9 : 1)]); }
-  const nBody = NR * NS1, nFin = (SPK.length * 2 + 4 * 4 + 2) * 3;   // spikes (2 tris each) + 4 legs (leg + 3 talons) + 2 tail-spade fins
-  const pos = new Float32Array((nBody + nFin) * 3), col = new Float32Array((nBody + nFin) * 3), uvs = new Float32Array((nBody + nFin) * 2);
-  const idx = [];
-  for (let i = 0; i < NR - 1; i++) for (let j = 0; j < NS; j++) {
-    const a = i * NS1 + j, b = a + 1, c = a + NS1, d = b + NS1;
-    idx.push(a, c, b, b, c, d);
-  }
-  for (let q = 0; q < nFin / 3; q++) idx.push(nBody + q * 3, nBody + q * 3 + 1, nBody + q * 3 + 2);
-  for (let i = 0; i < NR; i++) for (let j = 0; j < NS1; j++) {
-    const ang = j / NS * Math.PI * 2, up = Math.cos(ang);           // +1 top, -1 belly
-    const belly = smooth01(-up, 0.35, 0.85), back = smooth01(up, 0.3, 0.9);
-    const o = (i * NS1 + j) * 3, ridge = 1 - 0.35 * back;
-    for (let c = 0; c < 3; c++) col[o + c] = cfg.back[c] * ridge * (1 - belly) + cfg.belly[c] * belly;
-    uvs[(i * NS1 + j) * 2] = (i / (NR - 1)) * L / 9; uvs[(i * NS1 + j) * 2 + 1] = j / NS;
-  }
-  for (let q = nBody; q < nBody + nFin; q++) { col[q * 3] = cfg.spike[0]; col[q * 3 + 1] = cfg.spike[1]; col[q * 3 + 2] = cfg.spike[2]; uvs[q * 2] = 0.01; uvs[q * 2 + 1] = 0.25; }
-  const bodyGeo = new THREE.BufferGeometry();
-  bodyGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  bodyGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  bodyGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-  bodyGeo.setIndex(idx);
+  const lerp = THREE.MathUtils.lerp;
   const TX = DRAGON_TEX;
-  const skinOpts = { roughness: 0.55, metalness: cfg.metal, side: THREE.DoubleSide, envMapIntensity: 1.0 };
-  if (TX) Object.assign(skinOpts, { map: TX.alb, normalMap: TX.nrm, normalScale: new THREE.Vector2(1.3, 1.3), roughnessMap: TX.rgh, roughness: 1.0 });
+  const skinOpts = { roughness: 0.62, metalness: cfg.metal, side: THREE.DoubleSide, envMapIntensity: 1.0 };
+  if (TX) Object.assign(skinOpts, { map: TX.alb, normalMap: TX.nrm, normalScale: new THREE.Vector2(1.25, 1.25), roughnessMap: TX.rgh, roughness: 1.0 });
   const bodyMat = new THREE.MeshStandardMaterial({ vertexColors: true, ...skinOpts });
-  const body = new THREE.Mesh(bodyGeo, bodyMat); body.frustumCulled = false;
 
   // ---- head (static sculpt, head-local frame: +z forward, +y up), jaw hinged
   const head = new THREE.Group(), jaw = new THREE.Group();
@@ -3933,7 +3914,7 @@ function makeDragon(k, cfg, HUNTS) {
     for (let q = 0; q < 3; q++) hornG.push(taperTube(new THREE.CatmullRomCurve3([[1.25, -0.3 - q * 0.22, 0.6 - q * 0.55], [1.75 + q * 0.1, -0.45 - q * 0.25, -0.1 - q * 0.6], [2.05, -0.75 - q * 0.3, -0.75 - q * 0.6]].map(p => new THREE.Vector3(s * p[0], p[1], p[2]))), 5, 5, 0.16, 0.015));   // cheek frills
     hornG.push(taperTube(new THREE.CatmullRomCurve3([[0.55, 1.15, 0.6], [0.75, 1.75, 0.0], [0.7, 2.15, -0.6]].map(p => new THREE.Vector3(s * p[0], p[1], p[2]))), 6, 5, 0.16, 0.015));   // brow horns
   }
-  hornG.push(taperTube(new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.62, 4.1), new THREE.Vector3(0, 1.05, 4.0), new THREE.Vector3(0, 1.35, 3.6)]), 5, 6, 0.2, 0.02));   // nose horn
+  for (const s of [-1, 1]) for (let q = 0; q < 4; q++) hornG.push(taperTube(new THREE.CatmullRomCurve3([[0.45 + q * 0.28, 1.05 - q * 0.12, -0.2 - q * 0.55], [0.8 + q * 0.4, 1.45 - q * 0.15, -1.3 - q * 0.6], [1.0 + q * 0.5, 1.6 - q * 0.25, -2.4 - q * 0.6]].map(p => new THREE.Vector3(s * p[0], p[1], p[2]))), 6, 5, 0.22 - q * 0.02, 0.015));   // wyvern crown: fan of swept-back spikes
   head.add(new THREE.Mesh(mergeGeometries(hornG.map(strip)), hornMat));
   // teeth
   const tooth = (x, y, z, h, up, rw = 0.09) => { const g = new THREE.ConeGeometry(rw, h, 6); if (!up) g.rotateX(Math.PI); g.translate(x, y + (up ? h / 2 : -h / 2), z); return strip(g); };
@@ -3962,141 +3943,266 @@ function makeDragon(k, cfg, HUNTS) {
   }
   head.scale.setScalar(1.12);
 
-  // ---- wings: points in the shoulder frame (x outward, y up, z forward)
-  const WP0 = { S: [0, 0.8, 1.5], E: [13, 2.4, 5], W: [25, 2.8, 2.6], F1: [46, 1.2, -2], F2: [39, 0.2, -12], F3: [29, 0, -18], F4: [17, 0, -17.5], B: [0, 0, -12] };
-  const PANELS = [['S', 'E', 'B'], ['E', 'W', 'B'], ['W', 'F4', 'B'], ['W', 'F3', 'F4'], ['W', 'F2', 'F3'], ['W', 'F1', 'F2']];
-  const BONES = [['S', 'E'], ['E', 'W'], ['W', 'F1'], ['W', 'F2'], ['W', 'F3'], ['W', 'F4']];
-  const SAG = 2;
-  const wingGeo = new THREE.BufferGeometry();
-  const nWP = PANELS.length * 12 * 2 + BONES.length * 6 * 2 + 2 * 3;
-  const wpos = new Float32Array(nWP * 3), wcol = new Float32Array(nWP * 3), wuv = new Float32Array(nWP * 2), wedge = new Float32Array(nWP);
-  wingGeo.setAttribute('position', new THREE.BufferAttribute(wpos, 3));
-  wingGeo.setAttribute('color', new THREE.BufferAttribute(wcol, 3));
-  wingGeo.setAttribute('uv', new THREE.BufferAttribute(wuv, 2));
-  wingGeo.setAttribute('aEdge', new THREE.BufferAttribute(wedge, 1));
-  const wingMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.0, side: THREE.DoubleSide, envMapIntensity: 0.35, emissive: new THREE.Color(cfg.glowM) });
-  if (TX) {
-    wingMat.map = TX.memb; wingMat.emissiveMap = TX.memb;
-    wingMat.onBeforeCompile = (s) => {
-      s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nattribute float aEdge; varying float vEdge;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvEdge = aEdge;');
-      s.fragmentShader = s.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vEdge;')
-        .replace('#include <map_fragment>', '#include <map_fragment>\n{ float tear = (sampledDiffuseColor.a - 0.25) / 0.75; if (tear < vEdge * vEdge * vEdge * 1.05 - 0.08) discard; }');
-    };
-    wingMat.customProgramCacheKey = () => 'dragonWingV1';
+  // ---- wing skeleton (the wing IS the arm). Right wing in the shoulder frame: x out, y up, z forward; mirrored for
+  // the left. Planar layout by joint angles (θ > 0 = swept forward), then lifted: the whole wing about the shoulder's
+  // fore-aft axis (a1), the hand additionally about the wrist (a2) so the tip lags the arm.
+  const LH = 12, LF = 14.5, FL = [32, 25, 24.5, 21], FE = [-0.06, -0.52, -0.97, -1.42], FF = [-1.7, -1.92, -2.12, -2.32];
+  const WK = ['S', 'E', 'W', 'T', 'F1', 'F2', 'F3', 'F4', 'H'];
+  // membrane panels: apex, B, C, scallop of the free B–C edge, torn trailing edge?, B–C edge free (billows)?
+  const PANELS = [['E', 'S', 'W', 0.07, 0, 1], ['W', 'F1', 'F2', 0.24, 1, 1], ['W', 'F2', 'F3', 0.24, 1, 1], ['W', 'F3', 'F4', 0.22, 1, 1],
+    ['W', 'F4', 'E', 0, 0, 0], ['E', 'F4', 'H', 0.2, 1, 1], ['E', 'H', 'S', 0, 0, 0]];
+  const WR = {}; for (const key of WK) WR[key] = new THREE.Vector3();
+  function wingPoints(P) {
+    const f = P.fold, sw = P.sweep;
+    const ah = lerp(-0.22, -0.85, f) + sw, af = lerp(0.30, 1.35, f) + sw;
+    const Ex = LH * Math.cos(ah), Ez = LH * Math.sin(ah), Wx = Ex + LF * Math.cos(af), Wz = Ez + LF * Math.sin(af);
+    const c1 = Math.cos(P.a1), s1 = Math.sin(P.a1), c2 = Math.cos(P.a1 + P.a2), s2 = Math.sin(P.a1 + P.a2);
+    WR.S.set(0, 0, 0); WR.E.set(Ex * c1, Ex * s1, Ez); WR.W.set(Wx * c1, Wx * s1, Wz);
+    const hand = (key, a, l) => { const dx = l * Math.cos(a), dz = l * Math.sin(a); WR[key].set(Wx * c1 + dx * c2, Wx * s1 + dx * s2, Wz + dz); };
+    for (let q = 0; q < 4; q++) hand('F' + (q + 1), lerp(FE[q], FF[q], f) + sw * 0.6, FL[q] * (q === 0 ? 1 - 0.12 * f : 1));
+    hand('T', af + 0.75, 2.8);
   }
-  const wings = new THREE.Mesh(wingGeo, wingMat); wings.frustumCulled = false;
+  // rest-pose UVs for the membrane (planar, wing spread flat)
+  const UVR = {};
+  { wingPoints({ fold: 0, sweep: 0, a1: 0, a2: 0 }); for (const key of WK) if (key !== 'H') UVR[key] = [Math.max(0.02, WR[key].x / 60), (WR[key].z + 26) / 36]; UVR.H = [0.02, (-10 + 26) / 36]; WR.H.set(0, 0, -10); }
+
+  // ---- membranes: two LODs (subdivided + billowing near, one triangle per panel far)
+  const mkMemb = (n) => {
+    const per = (n + 1) * (n + 2) / 2, nv = per * PANELS.length * 2, g = new THREE.BufferGeometry();
+    const M = { n, per, g, P: new Float32Array(nv * 3), C: new Float32Array(nv * 3), U: new Float32Array(nv * 2), E: new Float32Array(nv), init: false };
+    g.setAttribute('position', new THREE.BufferAttribute(M.P, 3)); g.setAttribute('color', new THREE.BufferAttribute(M.C, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(M.U, 2)); g.setAttribute('aEdge', new THREE.BufferAttribute(M.E, 1));
+    const idx = [];
+    for (let w = 0; w < 2; w++) for (let pi = 0; pi < PANELS.length; pi++) {
+      const base = (w * PANELS.length + pi) * per, [a, b, c] = PANELS[pi];
+      const A = WR[a], B = WR[b], C = WR[c];
+      const cy = (B.z - A.z) * (C.x - A.x) - (B.x - A.x) * (C.z - A.z);          // y of (B−A)×(C−A) in the flat rest pose
+      const flip = (cy < 0) !== (w === 1);                                     // front face = dorsal on both wings
+      const id = (i, j) => base + i * (i + 1) / 2 + j;
+      const tri = (p, q, r) => flip ? idx.push(p, r, q) : idx.push(p, q, r);
+      for (let i = 0; i < n; i++) for (let j = 0; j <= i; j++) { tri(id(i, j), id(i + 1, j), id(i + 1, j + 1)); if (j < i) tri(id(i, j), id(i + 1, j + 1), id(i, j + 1)); }
+    }
+    g.setIndex(idx);
+    return M;
+  };
+  const MH = mkMemb(IS_MOBILE ? 3 : 4), ML = mkMemb(1);
+  const underK = new THREE.Vector3(...cfg.under.map((v, i) => v / Math.max(0.004, cfg.memb[i])));
+  const wingMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.0, side: THREE.DoubleSide, envMapIntensity: 0.35, emissive: new THREE.Color(cfg.glowM) });
+  if (TX) { wingMat.map = TX.memb; wingMat.emissiveMap = TX.memb; }
+  wingMat.onBeforeCompile = (s) => {
+    s.uniforms.uUnderK = { value: underK };
+    s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nattribute float aEdge; varying float vEdge;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvEdge = aEdge;');
+    let fs = s.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vEdge; uniform vec3 uUnderK;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= uUnderK;');   // lighter tan underside
+    if (TX) fs = fs.replace('#include <map_fragment>', '#include <map_fragment>\n{ float tear = (sampledDiffuseColor.a - 0.25) / 0.75; if (tear < vEdge * vEdge * vEdge * 0.8 - 0.1) discard; }');
+    s.fragmentShader = fs;
+  };
+  wingMat.customProgramCacheKey = () => 'wyvernWingV1' + (TX ? 't' : '');
+  const wingHi = new THREE.Mesh(MH.g, wingMat), wingLo = new THREE.Mesh(ML.g, wingMat);
+  wingHi.frustumCulled = wingLo.frustumCulled = false; wingLo.visible = false;
+
+  // ---- spine: frames per ring
+  const sp = Array.from({ length: NR }, () => ({ c: new THREE.Vector3(), t: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0), side: new THREE.Vector3(1, 0, 0), r: 1 }));
+  const Yup = new THREE.Vector3(0, 1, 0);
+  function spine(time, P) {
+    for (let i = 0; i < NR; i++) {
+      const u = i / (NR - 1), z = (u - 0.62) * L;
+      const tw = Math.pow(Math.max(0, 1 - u / 0.56), 1.25);                                   // 1 at the tail tip → 0 at the hips
+      const chestW = smooth01(u, 0.42, 0.62) * (1 - 0.85 * smooth01(u, 0.74, 1.0));          // the S-neck soaks up the heave
+      let y = 3.1 * smooth01(u, 0.70, 0.90) - 0.5 * smooth01(u, 0.92, 1.0);                   // S-curved neck, head carried level
+      y += P.heave * chestW;
+      y += tw * (2.4 * P.wF * Math.sin(P.phi - 1.2 - (0.56 - u) * 7.5) + 1.1 * Math.sin(time * 0.9 + k - u * 6));   // wave + follow-through
+      let x = tw * (1.7 * Math.sin(time * 1.15 + k * 0.7 - u * 7.0) - P.bank * 6.0 * tw);
+      x += 0.3 * Math.sin(time * 0.8 + k) * smooth01(u, 0.72, 1.0);
+      sp[i].c.set(x, y, z); sp[i].r = radius(u);
+    }
+    for (let i = 0; i < NR; i++) {
+      const a = sp[Math.max(0, i - 1)].c, b = sp[Math.min(NR - 1, i + 1)].c, R = sp[i];
+      R.t.subVectors(b, a).normalize(); R.side.crossVectors(Yup, R.t).normalize(); R.up.crossVectors(R.t, R.side).normalize();
+    }
+  }
+
+  // ---- body = tube rings + a triangle soup (dorsal ridge, neck spikes, tail paddle, hind legs + talons, wing bones)
+  const nBody = NR * NS1;
+  let pos = null, col = null, uvs = null, sN = 0, soupInit = false;
+  const em = (x, y, z, c, uu, vv) => {
+    if (pos) { const q = nBody + sN; pos[q * 3] = x; pos[q * 3 + 1] = y; pos[q * 3 + 2] = z; if (!soupInit) { col[q * 3] = c[0]; col[q * 3 + 1] = c[1]; col[q * 3 + 2] = c[2]; uvs[q * 2] = uu; uvs[q * 2 + 1] = vv; } }
+    sN++;
+  };
+  const pd = new THREE.Vector3(), pe1 = new THREE.Vector3(), pe2 = new THREE.Vector3();
+  const SQ = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+  function prism(A, B, r0, r1, hint, c, flat = 1) {             // 4-sided tapered limb segment
+    pd.subVectors(B, A); const len = pd.length() || 1e-4; pd.divideScalar(len);
+    pe1.crossVectors(pd, hint); if (pe1.lengthSq() < 1e-8) pe1.set(1, 0, 0); pe1.normalize(); pe2.crossVectors(pe1, pd);
+    const vl = len / 6;
+    const V = (P, r, q, uu, vv) => em(P.x + (pe1.x * q[0] + pe2.x * q[1] * flat) * r, P.y + (pe1.y * q[0] + pe2.y * q[1] * flat) * r, P.z + (pe1.z * q[0] + pe2.z * q[1] * flat) * r, c, uu, vv);
+    for (let s = 0; s < 4; s++) {
+      const a = SQ[s], b = SQ[(s + 1) % 4], v0 = 0.04 + s * 0.08, v1 = v0 + 0.08;
+      V(A, r0, a, 0, v0); V(B, r1, a, vl, v0); V(B, r1, b, vl, v1);
+      V(A, r0, a, 0, v0); V(B, r1, b, vl, v1); V(A, r0, b, 0, v1);
+    }
+  }
+  const ka = new THREE.Vector3(), kb = new THREE.Vector3(), kl = new THREE.Vector3(), kr = new THREE.Vector3(), kt = new THREE.Vector3();
+  function spike(base, t, side, up, h, w, lf, back, c) {         // 4-faced swept spike
+    kt.copy(base).addScaledVector(up, h).addScaledVector(t, -h * back);
+    ka.copy(base).addScaledVector(t, lf); kb.copy(base).addScaledVector(t, -lf); kl.copy(base).addScaledVector(side, w); kr.copy(base).addScaledVector(side, -w);
+    const P = (v, uu) => em(v.x, v.y, v.z, c, uu, 0.3);
+    P(ka, 0); P(kl, 0.05); P(kt, 0.1); P(kl, 0); P(kb, 0.05); P(kt, 0.1); P(kb, 0); P(kr, 0.05); P(kt, 0.1); P(kr, 0); P(ka, 0.05); P(kt, 0.1);
+  }
+  const SPK = [];
+  for (let i = 2; i < NR - 1; i++) { const u = i / (NR - 1); if (u < 0.05) continue; SPK.push([i, u > 0.78 ? 1.5 + 0.7 * smooth01(u, 0.78, 0.95) : u > 0.55 ? 1.3 : 0.3 + 1.0 * u / 0.55]); }
+  const NSPK = []; for (let i = Math.round(0.73 * (NR - 1)); i < NR - 1; i += 2) NSPK.push(i);
+  const dkSpike = cfg.spike, legC = cfg.back.map(v => v * 0.85), boneC = cfg.back.map(v => v * 0.75), clawC = cfg.spike.map(v => v * 1.4);
+  const footMid = new THREE.Vector3(0, -7.5, -5);
+  const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3(), t5 = new THREE.Vector3(), t6 = new THREE.Vector3(), t7 = new THREE.Vector3();
+  const BF = (out, o, R, sgn, dx, dy, dz) => out.copy(o).addScaledVector(R.side, sgn * dx).addScaledVector(R.up, dy).addScaledVector(R.t, dz);
+  const SIDES = [{ sgn: 1, sh: new THREE.Vector3(), H: new THREE.Vector3() }, { sgn: -1, sh: new THREE.Vector3(), H: new THREE.Vector3() }];
+  const wb = {}; for (const key of WK) wb[key] = new THREE.Vector3();
+  const toBody = (out, sd, w) => out.set(sd.sh.x + sd.sgn * w.x, sd.sh.y + w.y, sd.sh.z + w.z);
+
+  function soup(time, P, lo) {
+    sN = 0;
+    for (const [i, h] of SPK) { const R = sp[i]; spike(t1.copy(R.c).addScaledVector(R.up, R.r * 0.84), R.t, R.side, R.up, h, 0.22 + 0.1 * h, 0.42, 0.85, dkSpike); }
+    for (const i of NSPK) { const R = sp[i]; for (const sgn of [-1, 1]) {
+      t2.copy(R.side).multiplyScalar(sgn * 0.78).addScaledVector(R.up, 0.62).normalize();
+      t3.crossVectors(R.t, t2).normalize();
+      spike(t1.copy(R.c).addScaledVector(t2, R.r * 0.92), R.t, t3, t2, 0.95, 0.2, 0.32, 0.9, dkSpike); } }
+    { // spiked tail paddle
+      const R = sp[0], R2 = sp[2];
+      t1.copy(R.c).addScaledVector(R2.t, 1.3); t2.copy(R.c).addScaledVector(R.t, -3.4);
+      for (const sgn of [-1, 1]) {
+        t3.copy(R.c).addScaledVector(R.t, -0.7).addScaledVector(R.side, sgn * 1.7);
+        em(t1.x, t1.y, t1.z, dkSpike, 0, 0.3); em(t3.x, t3.y, t3.z, dkSpike, 0.1, 0.3); em(t2.x, t2.y, t2.z, dkSpike, 0.2, 0.3);
+        for (let q = 0; q < 2; q++) { t4.copy(R.c).addScaledVector(R.t, -0.2 - q * 1.5).addScaledVector(R.side, sgn * (1.4 - q * 0.45)); t5.copy(R.side).multiplyScalar(sgn).addScaledVector(R.t, -0.6).normalize(); spike(t4, R.t, R.up, t5, 1.0 - q * 0.2, 0.18, 0.3, 0.2, dkSpike); }
+      }
+    }
+    // hind legs: hang with a slight bob; reach down and open the talons to grab / carry a buffalo
+    const R = sp[iH], bob = 0.35 * P.wF * Math.sin(P.phi - 1.0) + 0.2 * Math.sin(time * 0.8 + k), rc = P.reach;
+    footMid.set(0, 0, 0);
+    for (const sgn of [-1, 1]) {
+      const hip = BF(t1, R.c, R, sgn, R.r * 0.72, -R.r * 0.3, 0);
+      const knee = BF(t2, hip, R, sgn, 0.5, -2.4 - 0.7 * rc + bob, 1.9 - 1.3 * rc);
+      const ankle = BF(t3, knee, R, sgn, 0.1, -2.2 - 0.9 * rc, -2.7 + 2.2 * rc);
+      const foot = BF(t4, ankle, R, sgn, 0, -1.5 + bob * 0.5, 0.25);
+      prism(hip, knee, 1.35, 0.8, R.side, legC); prism(knee, ankle, 0.75, 0.48, R.side, legC); prism(ankle, foot, 0.5, 0.36, R.side, legC);
+      footMid.add(foot);
+      for (let q = 0; q < 3; q++) {
+        const spr = (q - 1) * (0.45 + 0.35 * rc);
+        const toe = BF(t5, foot, R, sgn, spr, -0.35 - 0.4 * rc, 1.15 - 0.3 * rc);
+        const tip = BF(t6, toe, R, sgn, spr * 0.3, -0.85, 0.25 - 0.6 * (1 - rc));
+        prism(foot, toe, 0.3, 0.2, R.side, legC); prism(toe, tip, 0.17, 0.01, R.side, clawC);
+      }
+      prism(foot, BF(t7, foot, R, sgn, 0, -0.5, -1.0), 0.18, 0.01, R.side, clawC);   // dewclaw
+    }
+    footMid.multiplyScalar(0.5).addScaledVector(R.up, -1.0);
+    // wing arms + finger bones (+ the hooked claw at the wrist)
+    for (const sd of SIDES) {
+      for (const key of WK) toBody(wb[key], sd, WR[key]);
+      const hint = Yup;
+      prism(wb.S, wb.E, 1.1, 0.78, hint, boneC, 0.8); prism(wb.E, wb.W, 0.74, 0.44, hint, boneC, 0.8);
+      prism(wb.W, wb.T, 0.34, 0.02, hint, clawC);
+      for (let q = 1; q <= 4; q++) {
+        if (lo && q > 1) { for (let z = 0; z < 24; z++) em(wb.W.x, wb.W.y, wb.W.z, boneC, 0, 0); continue; }   // far LOD: fewer wing bones
+        prism(wb.W, wb['F' + q], q === 1 ? 0.4 : 0.3, 0.06, hint, boneC, 0.7);
+      }
+    }
+  }
+
+  function membrane(M, P) {
+    const n = M.n; let v = 0;
+    for (const sd of SIDES) {
+      WR.H.copy(sd.H);
+      for (let pi = 0; pi < PANELS.length; pi++) {
+        const [a, b, c, sc, tear, free] = PANELS[pi];
+        const A = WR[a], B = WR[b], C = WR[c], UA = UVR[a], UB = UVR[b], UC = UVR[c];
+        t1.subVectors(B, A); t2.subVectors(C, A); t3.crossVectors(t1, t2); if (t3.y < 0) t3.negate(); t3.normalize();
+        const span = Math.min(t1.length(), t2.length(), B.distanceTo(C));
+        const mc = cfg.memb, mc2 = cfg.memb2;
+        for (let i = 0; i <= n; i++) for (let j = 0; j <= i; j++) {
+          const r = i / n, t = i ? j / i : 0, wb_ = r * (1 - t), wc = r * t, edge = 4 * t * (1 - t);
+          t4.copy(A).addScaledVector(t1, wb_).addScaledVector(t2, wc);
+          if (sc) { t5.subVectors(A, t4); t4.addScaledVector(t5, sc * edge * r * r); }
+          const bub = free ? r * edge : r * edge * (1 - r) * 4;
+          if (n > 1) t4.addScaledVector(t3, P.billow * bub * span * 0.07);
+          const o = v * 3;
+          M.P[o] = sd.sh.x + sd.sgn * t4.x; M.P[o + 1] = sd.sh.y + t4.y; M.P[o + 2] = sd.sh.z + t4.z;
+          if (!M.init) {
+            const ee = tear ? (i === n ? (n > 1 ? 1 : 0.7) : i === n - 1 ? 0.35 : 0) : 0, cm = tear ? r * r : 0;
+            for (let d = 0; d < 3; d++) M.C[o + d] = mc[d] + (mc2[d] - mc[d]) * cm;
+            M.U[v * 2] = UA[0] + (UB[0] - UA[0]) * wb_ + (UC[0] - UA[0]) * wc; M.U[v * 2 + 1] = UA[1] + (UB[1] - UA[1]) * wb_ + (UC[1] - UA[1]) * wc;
+            M.E[v] = ee;
+          }
+          v++;
+        }
+      }
+    }
+    M.g.attributes.position.needsUpdate = true;
+    if (!M.init) { M.init = true; M.g.attributes.color.needsUpdate = M.g.attributes.uv.needsUpdate = M.g.attributes.aEdge.needsUpdate = true; }
+    M.g.computeVertexNormals();
+  }
+
+  let bodyGeo = null, body = null;
+  function build(time, P, lo) {
+    spine(time, P);
+    wingPoints(P);
+    const SH = sp[iS], HM = sp[iM];
+    for (const sd of SIDES) {
+      BF(sd.sh, SH.c, SH, sd.sgn, SH.r * 0.62, SH.r * 0.5, 0);
+      BF(t1, HM.c, HM, sd.sgn, HM.r * 0.8, HM.r * 0.1, 0);
+      sd.H.set(sd.sgn * (t1.x - sd.sh.x), t1.y - sd.sh.y, t1.z - sd.sh.z);
+    }
+    if (pos) for (let i = 0; i < NR; i++) {
+      const R = sp[i], u = i / (NR - 1), deep = 0.88 + 0.26 * smooth01(u, 0.5, 0.62) * (1 - smooth01(u, 0.7, 0.8));
+      for (let j = 0; j < NS1; j++) {
+        const ang = j / NS * Math.PI * 2, ca = Math.cos(ang);
+        const cy = ca * R.r * (ca < 0 ? deep : 0.92), cx = Math.sin(ang) * R.r;
+        const o = (i * NS1 + j) * 3;
+        pos[o] = R.c.x + R.side.x * cx + R.up.x * cy; pos[o + 1] = R.c.y + R.side.y * cx + R.up.y * cy; pos[o + 2] = R.c.z + R.side.z * cx + R.up.z * cy;
+      }
+    }
+    soup(time, P, lo);
+    if (pos) {
+      bodyGeo.attributes.position.needsUpdate = true;
+      if (!soupInit) { soupInit = true; bodyGeo.attributes.color.needsUpdate = bodyGeo.attributes.uv.needsUpdate = true; }
+      bodyGeo.computeVertexNormals();
+      // gimbal-steady head on the end of the S-neck: ignores the heave, leans against the bank, pitches against the climb
+      const R = sp[NR - 1];
+      head.position.copy(R.c).addScaledVector(R.t, -0.2);
+      head.rotation.set(P.headPitch, 0.12 * Math.sin(time * 0.5 + k), -P.bank * 0.6, 'YXZ');
+      wingHi.visible = !lo; wingLo.visible = lo;
+      membrane(lo ? ML : MH, P);
+    }
+  }
+
+  // ---- allocate the body (count the soup once in the rest pose), then assemble
+  const PZ = { a1: 0.1, a2: 0, fold: 0, sweep: 0, heave: 0, billow: 0.9, wF: 0, phi: 0, bank: 0, reach: 0, headPitch: 0.1 };
+  build(0, PZ, false);
+  const nSoup = sN;
+  pos = new Float32Array((nBody + nSoup) * 3); col = new Float32Array((nBody + nSoup) * 3); uvs = new Float32Array((nBody + nSoup) * 2);
+  {
+    const idx = [];
+    for (let i = 0; i < NR - 1; i++) for (let j = 0; j < NS; j++) { const a = i * NS1 + j, b = a + 1, c = a + NS1, d = b + NS1; idx.push(a, c, b, b, c, d); }
+    for (let q = 0; q < nSoup; q++) idx.push(nBody + q);
+    for (let i = 0; i < NR; i++) for (let j = 0; j < NS1; j++) {
+      const ang = j / NS * Math.PI * 2, up = Math.cos(ang);           // +1 top, −1 belly
+      const belly = smooth01(-up, 0.3, 0.8), back = smooth01(up, 0.3, 0.9);
+      const o = (i * NS1 + j) * 3, ridge = 1 - 0.4 * back;
+      for (let c = 0; c < 3; c++) col[o + c] = cfg.back[c] * ridge * (1 - belly) + cfg.belly[c] * belly;
+      uvs[(i * NS1 + j) * 2] = (i / (NR - 1)) * L / 4.2; uvs[(i * NS1 + j) * 2 + 1] = j / NS;
+    }
+    bodyGeo = new THREE.BufferGeometry();
+    bodyGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    bodyGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    bodyGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    bodyGeo.setIndex(idx);
+  }
+  body = new THREE.Mesh(bodyGeo, bodyMat); body.frustumCulled = false;
   const group = new THREE.Group(); group.name = 'dragon' + k;
-  group.add(body, wings, head);
+  group.add(body, wingHi, wingLo, head);
   const S = cfg.size;
   group.scale.setScalar(S);
   scene.add(group);
-
-  // ---- spine frame per ring (local: +z forward = head, +y up)
-  const sp = Array.from({ length: NR }, () => ({ c: new THREE.Vector3(), t: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0), side: new THREE.Vector3(1, 0, 0), r: 1 }));
-  const side = new THREE.Vector3(), upv = new THREE.Vector3(), Yup = new THREE.Vector3(0, 1, 0), hm = new THREE.Matrix4();
-  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
-  function buildBody(time, flap) {
-    for (let i = 0; i < NR; i++) {
-      const u = i / (NR - 1);
-      const z = (u - 0.62) * L;
-      const amp = (1 - smooth01(u, 0.5, 0.7)) * 1.6 + smooth01(u, 0.78, 1.0) * 0.6;
-      const y = Math.sin(u * 7.0 - time * 2.6 + k) * amp * 0.9 - flap * 0.6 * smooth01(u, 0.55, 0.7) * (1 - smooth01(u, 0.7, 0.85));
-      const x = Math.sin(u * 4.5 - time * 1.3 + k * 0.7) * amp * 0.9;
-      sp[i].c.set(x, y + (u > 0.86 ? (u - 0.86) * 9 : 0), z); sp[i].r = radius(u);
-    }
-    for (let i = 0; i < NR; i++) {
-      const a = sp[Math.max(0, i - 1)].c, b = sp[Math.min(NR - 1, i + 1)].c;
-      sp[i].t.subVectors(b, a).normalize();
-    }
-    for (let i = 0; i < NR; i++) {
-      const R = sp[i];
-      side.crossVectors(Yup, R.t).normalize();
-      upv.crossVectors(R.t, side).normalize();
-      R.up.copy(upv); R.side.copy(side);
-      for (let j = 0; j < NS1; j++) {
-        const ang = j / NS * Math.PI * 2;
-        const cy = Math.cos(ang) * R.r * 0.92 * (Math.cos(ang) < 0 ? 0.85 : 1), cx = Math.sin(ang) * R.r * 1.05;
-        const o = (i * NS1 + j) * 3;
-        pos[o] = R.c.x + side.x * cx + upv.x * cy; pos[o + 1] = R.c.y + side.y * cx + upv.y * cy; pos[o + 2] = R.c.z + side.z * cx + upv.z * cy;
-      }
-    }
-    // fins
-    let o = nBody * 3;
-    const put = (v) => { pos[o++] = v.x; pos[o++] = v.y; pos[o++] = v.z; };
-    const top = (i, kk = 1) => v1.copy(sp[i].c).addScaledVector(sp[i].up, sp[i].r * 0.88 * kk);
-    for (const [i, h] of SPK) {        // hooked dorsal spikes: two tris (front + swept back edge) for a thicker blade
-      const a = top(i).clone(), b = top(i - 1).clone(), tip = a.clone().addScaledVector(sp[i].up, h).addScaledVector(sp[i].t, -h * 0.8);
-      const a2 = a.clone().addScaledVector(sp[i].side, 0.18), b2 = b.clone().addScaledVector(sp[i].side, -0.18);
-      put(a2); put(b); put(tip); put(a); put(b2); put(tip);
-    }
-    for (const [ui, back] of [[0.47, 1], [0.63, 0]]) {                       // clawed legs tucked under the body
-      const i = Math.round(ui * (NR - 1)), R = sp[i];
-      for (const sgn of [-1, 1]) {
-        const hip = R.c.clone().addScaledVector(R.side, sgn * R.r * 0.7).addScaledVector(R.up, -R.r * 0.4);
-        const foot = hip.clone().addScaledVector(R.t, back ? -4.6 : -3.0).addScaledVector(R.up, -2.2).addScaledVector(R.side, sgn * 0.7);
-        put(hip); put(hip.clone().addScaledVector(R.t, 1.6)); put(foot);
-        for (let q = 0; q < 3; q++) {
-          const f = foot.clone().addScaledVector(R.side, (q - 1) * 0.35);
-          put(f); put(f.clone().addScaledVector(R.t, 0.35)); put(f.clone().addScaledVector(R.t, -0.9).addScaledVector(R.up, -0.7).addScaledVector(R.side, (q - 1) * 0.3));
-        }
-      }
-    }
-    const tc = sp[0].c, tt = sp[0].t, ts = sp[0].side;                     // tail spade
-    for (const sgn of [-1, 1]) {
-      put(v2.copy(tc).addScaledVector(tt, 1.6)); put(v3.copy(tc).addScaledVector(tt, -3.4)); put(v1.copy(tc).addScaledVector(ts, sgn * 2.2).addScaledVector(tt, 0.3));
-    }
-    bodyGeo.attributes.position.needsUpdate = true;
-    bodyGeo.computeVertexNormals();
-    // head rides on the last ring
-    const R = sp[NR - 1];
-    hm.makeBasis(R.side, R.up, R.t); head.quaternion.setFromRotationMatrix(hm);
-    head.position.copy(R.c).addScaledVector(R.t, -0.4);
-  }
-  // ---- wings
-  const rotZ = (p, piv, a) => { const x = p[0] - piv[0], y = p[1] - piv[1], c = Math.cos(a), s = Math.sin(a); return [piv[0] + x * c - y * s, piv[1] + x * s + y * c, p[2]]; };
-  const UVof = (p) => [Math.max(0.03, p[0] / 48), (p[2] + 19) / 26];
-  let uvDone = false;
-  function buildWings(time, flap, fold) {
-    const SH = sp[Math.round(0.6 * (NR - 1))];
-    let vi = 0;
-    const pushV = (p, c, uv, e) => { wpos[vi * 3] = p[0]; wpos[vi * 3 + 1] = p[1]; wpos[vi * 3 + 2] = p[2]; if (!uvDone) { wcol[vi * 3] = c[0]; wcol[vi * 3 + 1] = c[1]; wcol[vi * 3 + 2] = c[2]; wuv[vi * 2] = uv[0]; wuv[vi * 2 + 1] = uv[1]; wedge[vi] = e; } vi++; };
-    const a1 = flap * 0.62, a2 = Math.sin(time * 2.8 - 0.9 + k) * 0.38 * (0.4 + 0.6 * Math.abs(flap));
-    for (const sgn of [1, -1]) {
-      const P = {};
-      for (const key in WP0) {
-        let p = WP0[key].slice();
-        p[0] *= (key[0] === 'F' || key === 'W') ? fold : 1;
-        if (key !== 'S' && key !== 'E' && key !== 'B') p = rotZ(p, WP0.E, a2);
-        if (key !== 'S' && key !== 'B') p = rotZ(p, WP0.S, a1);
-        P[key] = [SH.c.x + sgn * (p[0] + SH.r * 0.85), SH.c.y + p[1] + SH.r * 0.35, SH.c.z + p[2]];
-      }
-      P.B[0] = SH.c.x + sgn * SH.r * 0.7;
-      const memb = cfg.memb, memb2 = cfg.memb2, bone = cfg.spike;
-      for (let pi = 0; pi < PANELS.length; pi++) {
-        const [a, b, c] = PANELS[pi], trailing = pi >= 2;
-        const A = P[a], Bv = P[b], C = P[c], RA = WP0[a], RB = WP0[b], RC = WP0[c];
-        const mid = (p, q, sag) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2 - sag, (p[2] + q[2]) / 2];
-        let ab = mid(A, Bv, 0), bc = mid(Bv, C, SAG * 0.6 * (1 + flap * 0.3)), ca = mid(C, A, SAG * 0.3);
-        let rab = mid(RA, RB, 0), rbc = mid(RB, RC, 0), rca = mid(RC, RA, 0);
-        if (a === 'W') { const kk = b === 'F4' ? 0.18 : 0.3; bc = bc.map((v, d) => v + (A[d] - v) * kk); rbc = rbc.map((v, d) => v + (RA[d] - v) * kk); }   // scalloped trailing edge
-        const E = trailing ? { A: 0, ab: 0.35, ca: 0.35, B: 0.75, C: 0.75, bc: 1 } : { A: 0, ab: 0, ca: 0, B: 0, C: 0, bc: 0 };
-        for (const [t0, t1, t2] of [[['A', A, RA], ['ab', ab, rab], ['ca', ca, rca]], [['ab', ab, rab], ['B', Bv, RB], ['bc', bc, rbc]], [['ca', ca, rca], ['bc', bc, rbc], ['C', C, RC]], [['ab', ab, rab], ['bc', bc, rbc], ['ca', ca, rca]]]) {
-          for (const [nm, p, r] of [t0, t1, t2]) pushV(p, nm === 'bc' || nm === 'ab' ? memb2 : memb, UVof(r), E[nm]);
-        }
-      }
-      for (const [a, b] of BONES) {
-        const A = P[a], Bv = P[b], w = a === 'S' || a === 'E' ? 0.75 : 0.36;
-        const A2 = [A[0], A[1] + w, A[2] + w * 0.5], B2 = [Bv[0], Bv[1] + w * 0.4, Bv[2]];
-        for (const p of [A, Bv, A2, A2, Bv, B2]) pushV(p, bone, [0.01, 0.01], 0);
-      }
-      // wrist thumb-claw
-      const W = P.W; pushV(W, bone, [0.01, 0.01], 0); pushV([W[0], W[1] + 0.4, W[2]], bone, [0.01, 0.01], 0); pushV([W[0] + sgn * 0.6, W[1] + 0.2, W[2] + 2.4], bone, [0.01, 0.01], 0);
-    }
-    wingGeo.setDrawRange(0, vi);
-    wingGeo.attributes.position.needsUpdate = true;
-    if (!uvDone) { uvDone = true; wingGeo.attributes.color.needsUpdate = wingGeo.attributes.uv.needsUpdate = wingGeo.attributes.aEdge.needsUpdate = true; }
-    wingGeo.computeVertexNormals();
-  }
+  build(0, PZ, false);
 
   // ---- flight path: a closed loop over the ridges, well clear of the terrain
   let curve = null, len = 1, u = (k / 6 + 0.13 * k) % 1;
@@ -4130,6 +4236,8 @@ function makeDragon(k, cfg, HUNTS) {
   const dpos = new THREE.Vector3(), dir = new THREE.Vector3(1, 0, 0), prevPos = new THREE.Vector3(), off = new THREE.Vector3(), tv = new THREE.Vector3(), T = new THREE.Vector3(), claw = new THREE.Vector3();
   const Z1 = new THREE.Vector3(0, 0, 1), Y1 = new THREE.Vector3(0, 1, 0);
   let bank = 0, time = k * 1.7, spd = SPEED, mode = 'patrol', started = false, uc = 0, foldT = 1, jawA = 0, frameN = k;
+  let flapW = 0.6, tuck = 0, reach = 0, phi = k * 1.9, poseOverride = null;
+  const A1 = (p) => { p -= Math.floor(p); if (p < 0.55) { const e = 0.5 - 0.5 * Math.cos(Math.PI * p / 0.55); return 0.95 - 1.67 * e; } const e = 0.5 - 0.5 * Math.cos(Math.PI * (p - 0.55) / 0.45); return -0.72 + 1.67 * e; };   // shoulder elevation over one beat
   let hunt = null, cooldown = 9 + k * 7 + Math.random() * 4, lastPlayer = false;
   const H = 58, VD = 26, LEAD = 430;
   const th = (x, z) => terrainHeightAt ? terrainHeightAt(x, z) : 0;
@@ -4194,7 +4302,7 @@ function makeDragon(k, cfg, HUNTS) {
     if (minClear != null) { const g = th(dpos.x, dpos.z) + minClear; if (dpos.y < g) dpos.y += (g - dpos.y) * Math.min(1, dt * 5); }
     return dist;
   }
-  function clawPos(out) { group.updateMatrixWorld(true); return group.localToWorld(out.set(0, -5.2, -1.2)); }
+  function clawPos(out) { group.updateMatrixWorld(true); return group.localToWorld(out.copy(footMid)); }
   function holdBuffalo(b) {
     clawPos(claw);
     b.x = claw.x; b.y = claw.y - 2.05 * b.sc; b.z = claw.z;
@@ -4322,9 +4430,39 @@ function makeDragon(k, cfg, HUNTS) {
     bank += (THREE.MathUtils.clamp(turnRate * 1.42, -0.75, 0.75) - bank) * Math.min(1, dt * 1.5);
     const climb = THREE.MathUtils.clamp(dir.y, -1, 1);
     const carrying = mode === 'hunt' && hunt && (hunt.phase === 'carry' || hunt.phase === 'strafe');
-    const flapAmp = carrying ? 1.0 : THREE.MathUtils.clamp(0.55 + climb * 3, 0.18, 1.0) * (hunt && hunt.phase === 'dive' ? 0.5 : 1);
-    const flap = Math.sin(time * (carrying ? 3.4 : 2.8)) * flapAmp;
-    group.position.copy(dpos); group.position.y += Math.sin(time * 2.8 - 1.2) * 1.6 * flapAmp;
+    // ---- flight state → flap/soar blend: climbing, hunting and hauling a buffalo = heavy flapping; cruising = a few
+    // beats then a long soar; diving = wings half-tucked and swept back, flaring into big braking beats at the grab
+    let wT, tuckT = 0, reachT = 0, omega = 3.9;
+    const ph = hunt && hunt.phase;
+    if (mode === 'patrol') {
+      const burst = ((time + k * 3.7) % 15) < 5.2 ? 0.95 : 0;
+      wT = Math.max(burst, THREE.MathUtils.clamp((climb - 0.02) * 8, 0, 1)); if (climb < -0.06) wT *= 0.25;
+    } else if (mode === 'hunt' && ph === 'dive' && hunt.buf) {
+      const dd = Math.hypot(dpos.x - hunt.buf.x, dpos.y - hunt.buf.y, dpos.z - hunt.buf.z);
+      wT = dd < 70 ? 1 : 0; tuckT = dd < 70 ? 0 : 1; reachT = dd < 130 ? 1 : 0; omega = 4.6;
+    } else if (carrying) { wT = 1; reachT = 1; omega = ph === 'strafe' ? 4.2 : 4.5; }
+    else { wT = 0.9; reachT = mode === 'hold' && hunt && hunt.buf ? 1 : 0; }
+    const PO = poseOverride;
+    if (PO) { if (PO.wF != null) wT = PO.wF; if (PO.tuck != null) tuckT = PO.tuck; if (PO.reach != null) reachT = PO.reach; }
+    flapW += (wT - flapW) * Math.min(1, dt * 1.1);
+    tuck += (tuckT - tuck) * Math.min(1, dt * 1.8);
+    reach += (reachT - reach) * Math.min(1, dt * 2.0);
+    phi += omega * dt;
+    if (PO && PO.phase != null) { phi = PO.phase * Math.PI * 2; if (PO.wF != null) flapW = PO.wF; if (PO.tuck != null) tuck = PO.tuck; if (PO.reach != null) reach = PO.reach; }
+    {
+      const p = phi / (Math.PI * 2), pp = p - Math.floor(p), down = pp < 0.55, x = down ? pp / 0.55 : (pp - 0.55) / 0.45, sx = Math.sin(Math.PI * x), w = flapW;
+      const fa1 = A1(p), fa2 = THREE.MathUtils.clamp(0.85 * (A1(p - 0.09) - fa1), -0.65, 0.65);
+      const sa1 = 0.11 + 0.035 * Math.sin(time * 0.7 + k), sa2 = -0.05 + 0.03 * Math.sin(time * 0.7 + k - 0.7);
+      PZ.a1 = lerp(sa1, fa1, w); PZ.a2 = lerp(sa2, fa2, w);
+      PZ.fold = lerp(0.03, down ? 0 : 0.62 * sx, w); PZ.sweep = lerp(0.02, down ? 0.13 * sx : -0.16 * sx, w);
+      PZ.heave = lerp(0.35 * Math.sin(time * 0.6 + k), -1.4 * (A1(p - 0.12) - 0.1), w);       // chest heaves against the wings
+      PZ.billow = lerp(1.0, 0.7 + 1.5 * (down ? sx : 0), w);
+      PZ.a1 = lerp(PZ.a1, 0.3, tuck); PZ.a2 = lerp(PZ.a2, -0.3, tuck); PZ.fold = Math.max(PZ.fold, 0.5 * tuck); PZ.sweep -= 0.3 * tuck;
+      PZ.wF = w; PZ.phi = phi; PZ.bank = bank; PZ.reach = reach;
+      PZ.headPitch = 0.12 + 0.5 * Math.asin(THREE.MathUtils.clamp(fwdS.y, -0.7, 0.7));
+      group.position.copy(dpos);
+      group.position.y += w * -1.3 * (A1(p - 0.25) - 0.1) + (1 - w) * 0.7 * Math.sin(time * 0.5 + k);   // lift surges on each downstroke / soar float
+    }
     const f = tv.copy(fwdS); f.y = THREE.MathUtils.clamp(f.y, -0.7, 0.7); f.normalize();
     right.crossVectors(f, Y1).normalize();
     upW.crossVectors(right, f).normalize();
@@ -4340,11 +4478,12 @@ function makeDragon(k, cfg, HUNTS) {
     const d = camPos ? group.position.distanceTo(camPos) : 0;
     group.visible = d < 6500;
     if (!group.visible) return;
-    // LOD: far dragons re-skin less often (mobile is stricter); frames are staggered per dragon
+    // LOD: far wyverns use the one-triangle-per-panel membrane + arm-only wing bones and re-skin less often
+    // (mobile is stricter); frames are staggered per dragon
+    const lo = d > (IS_MOBILE ? 700 : 1100);
     const every = IS_MOBILE ? (d > 3000 ? 6 : d > 1200 ? 3 : 1) : (d > 2500 ? 3 : 1);
     if (every > 1 && (frameN % every)) return;
-    buildBody(time, flap);
-    buildWings(time, flap, foldT < 1 ? foldT : 0.92 + 0.08 * Math.cos(time * 2.8));
+    build(time, PZ, lo);
   }
   function cancel() {
     if (hunt && hunt.buf && (hunt.buf.mode === 'carried' || hunt.buf.mode === 'look')) { hunt.buf.mode = 'graze'; hunt.buf.claimed = null; }
@@ -4357,6 +4496,8 @@ function makeDragon(k, cfg, HUNTS) {
     k, cfg, group, update, cancel, startHunt, marker, head, jaw,
     get u() { return u; }, set u(v) { u = v; }, get curve() { return curve; }, get mode() { return mode; }, get hunt() { return hunt; },
     set cooldown(v) { cooldown = v; }, get cooldown() { return cooldown; }, get dpos() { return dpos; },
+    /** preview hook: { wF, phase (0..1), tuck, reach } pins the flap/soar pose; null = flight-state driven */
+    set pose(v) { poseOverride = v; }, get pose() { return poseOverride; }, get flapW() { return flapW; },
     /** test hook: grab a buffalo now and appear at the strafe start in front of a target */
     debugCarry(kind, ai) {
       const tg = kind === 'p' ? { kind: 'p' } : { kind: 'ai', a: AI[ai || 0] };
