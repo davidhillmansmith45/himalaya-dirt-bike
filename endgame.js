@@ -2,7 +2,8 @@
 // helipad with 7 Apaches, then flies against all the wyverns. Most dragons shot down wins. Wyverns fight back: they
 // dive on the helicopters, grab them in their talons and hurl them at the mountain; the pilot is thrown out and falls.
 // If YOU fall to the ground you lose. Everything is procedural + pooled so it stays playable on an iPhone.
-import { makeRider, makeGearMaterial } from './rider.js?v=m4';
+import { makeRider, makeGearMaterial } from './rider.js?v=m5';
+import { buildApacheKit } from './apache.js?v=1';
 export function createEndgame(G) {
   const { THREE, scene, camera, state, keys, AI, RIVALS, DRAGON, SFX, IS_MOBILE, toast, groundAt, pathPoint, FINISH_S, TRACK_LEN,
     makeNameTag, mergeGeometries, DRAGON_LOD, altShown } = G;
@@ -109,85 +110,21 @@ button#egGo[hidden]{display:none}
   const smokeTex = radial([[0, 'rgba(70,66,62,.85)'], [0.5, 'rgba(60,56,52,.5)'], [1, 'rgba(40,40,40,0)']]);
   const dustTex = radial([[0, 'rgba(190,170,140,.75)'], [0.6, 'rgba(170,150,120,.35)'], [1, 'rgba(150,130,100,0)']]);
   const sparkTex = radial([[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,230,140,.9)'], [1, 'rgba(255,120,0,0)']]);
-  const olive = canvasTex(256, 256, (g, w, h) => {
-    g.fillStyle = '#4a5228'; g.fillRect(0, 0, w, h);
-    const id = g.getImageData(0, 0, w, h), d = id.data;
-    for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 18; d[i] += n; d[i + 1] += n; d[i + 2] += n * 0.6; }
-    g.putImageData(id, 0, 0);
-    g.strokeStyle = 'rgba(20,24,10,.55)'; g.lineWidth = 1.2;
-    for (let i = 0; i < 9; i++) { const x = (i * 29 + 7) % w; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
-    for (let i = 0; i < 6; i++) { const y = (i * 43 + 11) % h; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
-    g.fillStyle = 'rgba(30,30,20,.5)'; for (let i = 0; i < 160; i++) g.fillRect(Math.random() * w, Math.random() * h, 1.5, 1.5);
-    for (let i = 0; i < 18; i++) { g.fillStyle = `rgba(20,18,10,${0.05 + Math.random() * 0.1})`; g.beginPath(); g.ellipse(Math.random() * w, Math.random() * h, 8 + Math.random() * 30, 3 + Math.random() * 8, Math.random() * 3, 0, 7); g.fill(); }
-  });
-  olive.wrapS = olive.wrapT = THREE.RepeatWrapping;
-  const bodyMat = new THREE.MeshStandardMaterial({ map: olive, color: 0xffffff, roughness: 0.72, metalness: 0.28, envMapIntensity: 0.8 });
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x1d1f1c, roughness: 0.55, metalness: 0.55 });
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0x0c1218, roughness: 0.08, metalness: 0.9, envMapIntensity: 1.6 });
-  const bladeMat = new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.6, metalness: 0.3, side: THREE.DoubleSide });
 
-  // ======================================================================= Apache AH-64 (procedural, ~6 draw calls)
-  const APACHE = (() => {
-    const B = [], D = [], Gl = [], T = [];
-    const ni = (g) => (g.index ? g.toNonIndexed() : g);
-    const keep = (g) => { g = ni(g); for (const n of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n); if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2)); return g; };
-    const prof = [[7.7, 1.2], [7.5, 1.95], [6.7, 2.45], [5.2, 2.85], [1.2, 3.25], [-1.8, 3.25], [-3.4, 2.9], [-4.9, 2.55], [-4.9, 1.5], [-2.4, 0.85], [4.6, 0.8], [6.8, 0.92]];
-    const sh = new THREE.Shape(); prof.forEach(([z, y], i) => (i ? sh.lineTo(z, y) : sh.moveTo(z, y)));
-    const fus = new THREE.ExtrudeGeometry(sh, { depth: 1.7, bevelEnabled: true, bevelThickness: 0.22, bevelSize: 0.2, bevelSegments: 2, steps: 1 });
-    fus.translate(0, 0, -0.85); fus.rotateY(-Math.PI / 2);
-    { const uv = fus.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 0.12, uv.getY(i) * 0.12); }
-    B.push(fus);
-    const box = (w, h, d, x, y, z, arr, rx = 0) => { const g = new THREE.BoxGeometry(w, h, d); if (rx) g.rotateX(rx); g.translate(x, y, z); arr.push(g); return g; };
-    const cylZ = (r0, r1, len, x, y, z, arr, seg = 10) => { const g = new THREE.CylinderGeometry(r0, r1, len, seg); g.rotateX(Math.PI / 2); g.translate(x, y, z); arr.push(g); return g; };
-    // tandem canopy (gunner front-low, pilot behind-high) + frames
-    box(1.45, 0.62, 1.9, 0, 3.05, 4.25, Gl, -0.28); box(1.5, 0.82, 2.0, 0, 3.45, 2.2, Gl, -0.18);
-    box(1.55, 0.08, 0.1, 0, 3.4, 3.3, D); box(1.6, 0.08, 0.1, 0, 3.86, 1.25, D);
-    // tail boom, fin, stabiliser, team colours
-    cylZ(0.36, 0.66, 5.6, 0, 2.05, -7.6, B, 8);
-    box(0.22, 2.9, 1.5, 0, 3.25, -10.15, B, -0.22); box(0.26, 0.55, 1.55, 0, 4.45, -10.45, T, -0.22);
-    box(3.6, 0.12, 0.95, 0, 2.15, -9.7, B);
-    box(1.98, 0.42, 4.6, 0, 2.15, -1.4, T);
-    // engines + exhausts + intakes
-    for (const s of [-1, 1]) { cylZ(0.6, 0.55, 3.6, s * 1.32, 2.95, -0.7, B, 12); cylZ(0.42, 0.42, 0.7, s * 1.32, 2.95, -2.75, D, 10); box(0.5, 0.8, 0.8, s * 1.15, 2.45, 0.9, B); }
-    // mast + Longbow radar dome
-    { const g = new THREE.CylinderGeometry(0.22, 0.3, 1.0, 8); g.translate(0, 3.85, 0.2); D.push(g); }
-    { const g = new THREE.SphereGeometry(0.72, 14, 8); g.scale(1, 0.55, 1); g.translate(0, 5.0, 0.2); B.push(g); }
-    // stub wings with rocket pods + Hellfire rails
-    box(6.8, 0.2, 1.5, 0, 2.05, 0.35, B);
-    for (const s of [-1, 1]) {
-      cylZ(0.34, 0.34, 1.9, s * 2.05, 1.6, 0.55, D, 10); box(0.12, 0.35, 0.9, s * 2.05, 1.85, 0.5, D);
-      for (const a of [-1, 1]) for (const b of [-1, 1]) cylZ(0.11, 0.11, 1.55, s * 3.05 + a * 0.16, 1.62 + b * 0.16, 0.7, D, 6);
-      box(0.1, 0.3, 1.1, s * 3.05, 1.92, 0.55, D);
-    }
-    // chin gun + nose sensor turret
-    { const g = new THREE.SphereGeometry(0.3, 10, 8); g.translate(0, 0.62, 5.3); D.push(g); }
-    cylZ(0.075, 0.075, 1.7, 0, 0.55, 6.15, D, 6);
-    box(0.85, 0.7, 0.55, 0, 1.25, 7.85, D); { const g = new THREE.SphereGeometry(0.28, 10, 8); g.translate(0.32, 1.2, 8.1); D.push(g); const g2 = g.clone(); g2.translate(-0.64, 0, 0); D.push(g2); }
-    // landing gear
-    for (const s of [-1, 1]) { const st = new THREE.CylinderGeometry(0.08, 0.08, 1.1, 6); st.rotateZ(s * 0.35); st.translate(s * 1.25, 0.65, 3.4); D.push(st); const w = new THREE.CylinderGeometry(0.42, 0.42, 0.28, 14); w.rotateZ(Math.PI / 2); w.translate(s * 1.5, 0.42, 3.45); D.push(w); }
-    { const st = new THREE.CylinderGeometry(0.06, 0.06, 1.5, 6); st.translate(0, 1.05, -9.5); D.push(st); const w = new THREE.CylinderGeometry(0.24, 0.24, 0.16, 10); w.rotateZ(Math.PI / 2); w.translate(0, 0.24, -9.55); D.push(w); }
-    const body = mergeGeometries(B.map(keep)), dark = mergeGeometries(D.map(keep)), glass = mergeGeometries(Gl.map(keep)), team = mergeGeometries(T.map(keep));
-    const blades = []; for (let i = 0; i < 4; i++) { const g = new THREE.BoxGeometry(7.3, 0.07, 0.55); g.translate(3.95, 0, 0); g.rotateY(i * Math.PI / 2 + 0.03); blades.push(keep(g)); }
-    blades.push(keep(new THREE.CylinderGeometry(0.42, 0.42, 0.3, 10)));
-    const rotorG = mergeGeometries(blades);
-    const tailG = mergeGeometries([keep(new THREE.BoxGeometry(0.06, 2.9, 0.26)), keep(new THREE.BoxGeometry(0.06, 0.26, 2.9))]);
-    const discG = new THREE.CircleGeometry(11.2, 40); discG.rotateX(-Math.PI / 2);
-    const tdiscG = new THREE.CircleGeometry(1.5, 20); tdiscG.rotateY(Math.PI / 2);
-    return { body, dark, glass, team, rotorG, tailG, discG, tdiscG };
-  })();
-  function makeApache(col, tag) {
-    const root = new THREE.Group(); root.rotation.order = 'YXZ';
-    const tm = new THREE.MeshStandardMaterial({ color: col, roughness: 0.5, metalness: 0.2, emissive: new THREE.Color(col).multiplyScalar(0.12) });
-    const add = (g, m) => { const o = new THREE.Mesh(g, m); o.castShadow = !IS_MOBILE; o.receiveShadow = false; root.add(o); return o; };
-    add(APACHE.body, bodyMat); add(APACHE.dark, darkMat); add(APACHE.glass, glassMat); add(APACHE.team, tm);
-    const rotor = new THREE.Mesh(APACHE.rotorG, bladeMat); rotor.position.set(0, 4.55, 0.2); rotor.castShadow = !IS_MOBILE; root.add(rotor);
-    const disc = new THREE.Mesh(APACHE.discG, new THREE.MeshBasicMaterial({ color: 0x101214, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
-    disc.position.copy(rotor.position); root.add(disc);
-    const trotor = new THREE.Mesh(APACHE.tailG, bladeMat); trotor.position.set(0.32, 3.95, -10.35); root.add(trotor);
-    const tdisc = new THREE.Mesh(APACHE.tdiscG, disc.material); tdisc.position.copy(trotor.position); root.add(tdisc);
+  // ======================================================================= Apache AH-64D (apache.js: lofted PBR model, hi/lo LOD, shared rotor)
+  let AK = null;
+  const apacheKit = () => (AK || (AK = buildApacheKit(THREE, mergeGeometries, { mobile: IS_MOBILE })));
+  function makeApache(col, tag, R) {
+    const K = apacheKit();
+    const A = K.make(col, R ? R.num : '', R ? (R.player ? 'Smith' : R.name) : '', !IS_MOBILE);
+    const root = A.root;
+    const disc = new THREE.Mesh(K.discG, new THREE.MeshBasicMaterial({ color: 0x101214, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+    disc.position.copy(A.rotor.position); root.add(disc);
+    const tdisc = new THREE.Mesh(K.tdiscG, disc.material); tdisc.position.copy(A.trotor.position); root.add(tdisc);
     if (tag) { tag.scale.set(7.8, 1.95, 1); tag.position.set(0, 7.6, 0); root.add(tag); }
     scene.add(root);
-    return { root, rotor, disc, trotor, tdisc, tm, tag };
+    return { root, rotor: A.rotor, disc, trotor: A.trotor, tdisc, tm: A.tm, tag, lod: A.lod, strobe: A.strobe };
   }
 
   // ======================================================================= pilot figure (walkers + ejected pilots)
@@ -241,10 +178,11 @@ button#egGo[hidden]{display:none}
     scene.add(g);
     return { g, limbs, yawOff: 0, ph: Math.random() * 6 };
   }
-  function poseWalk(P, dt, v) {
+  function poseWalk(P, dt, v, o) {
+    if (P.rig && P.rig.gait) return P.rig.gait(v, dt, o);
     P.ph += dt * v * 1.15;
     const amt = Math.min(1, v / 4.5);
-    if (P.rig) { P.rig.walk(P.ph, amt, dt); return; }
+    if (P.rig) { P.rig.walk(P.ph, amt, dt); return 0; }
     const a = Math.sin(P.ph) * 0.6 * amt; P.limbs[0].rotation.x = a; P.limbs[1].rotation.x = -a; P.limbs[2].rotation.x = -a * 0.8; P.limbs[3].rotation.x = a * 0.8; P.limbs[2].rotation.z = P.limbs[3].rotation.z = 0;
   }
   function poseFlail(P, dt) {
@@ -331,6 +269,7 @@ button#egGo[hidden]{display:none}
     return {
       gun(vol) { const n = performance.now(); if (n - lastGun < 70) return; lastGun = n; burst(vol * 0.5, 2600, 500, 0.09, 'bandpass', 1.2); thump(vol * 0.35, 140, 0.07); },
       missile(vol) { burst(vol * 0.6, 900, 3200, 0.9, 'bandpass', 0.7); },
+      step(vol, metal) { if (metal) { burst(vol * 0.16, 3200, 900, 0.06, 'bandpass', 1.6); thump(vol * 0.12, 210, 0.05); } else { burst(vol * 0.22, 1800, 420, 0.09, 'bandpass', 0.9); thump(vol * 0.06, 90, 0.06); } },
       boom(vol) { if (vol < 0.03) return; burst(Math.min(1, vol * 1.1), 1500, 60, 1.8); thump(Math.min(1, vol), 70, 0.9); },
       rotorStart() {
         try {
@@ -441,7 +380,7 @@ button#egGo[hidden]{display:none}
     RIVALS.forEach((r, i) => RACERS.push({ id: i + 1, name: r.name, num: r.num, col: r.col, skill: r.skill, ai: AI[i] || null, r }));
     RACERS.forEach((R, i) => {
       const tag = R.player ? null : makeNameTag({ col: R.col, num: R.num, name: R.name });
-      const H = makeApache(R.col, tag);
+      const H = makeApache(R.col, tag, R);
       Object.assign(H, { owner: R, pos: new V3(), vel: new V3(), yaw: 0, pv: 0, rv: 0, rpm: 0, st: 'parked', t: 0, fireCd: 0, mslCd: 0, tgtD: null, targeted: null, spin: new V3(), side: 1, spot: SPOTS[i], retgt: 0 });
       R.heli = H; HELIS.push(H);
     });
@@ -452,7 +391,7 @@ button#egGo[hidden]{display:none}
   let active = false, phase = 'off', clock = 0, goT = -1, result = null;
   const WAR_TIME = 300;
   const me = () => RACERS[0];
-  const P = { pos: new V3(), yaw: 0, pitch: 0, bob: 0, boardT: 0 };   // you, on foot
+  const P = { pos: new V3(), vel: new V3(), yaw: 0, pitch: 0, bob: 0, boardT: 0, body: null, roll: 0, lastYaw: 0 };   // you, on foot (full-body first person)
   const STATS = { attacks: 0, commits: 0, grabs: 0, throws: 0, dodges: 0, breakFree: 0 };
   let lastPlayerAtt = -99, schedT = 0, lockD = null, gunD = null, ammo = 16, fallP = null;
   const camP = new V3(), camL = new V3();
@@ -499,6 +438,9 @@ button#egGo[hidden]{display:none}
     P.pos.set(state.x + sP.x * 1.4, 0, state.z + sP.z * 1.4);
     if (!walkable(P.pos.x, P.pos.z)) P.pos.set(F.x, 0, F.z);
     P.pos.y = floorAt(P.pos.x, P.pos.z); P.yaw = Math.atan2(-(padC.x - P.pos.x), -(padC.z - P.pos.z)); P.pitch = -0.04; P.boardT = 0;
+    P.vel.set(0, 0, 0); P.lastYaw = P.yaw;
+    if (KIT && (!P.body || !P.body.rig)) { try { P.body = makeRig({ player: true, col: 0xff6a00, name: 'SMITH', num: '45' }); const b = P.body.rig.bones; if (b.head) b.head.scale.setScalar(0.001); P.body.g.traverse(o => { if (o.isMesh && o.geometry && o.geometry.type === 'TorusGeometry') o.visible = false; if (o.isMesh) o.castShadow = !IS_MOBILE; }); } catch (e) { console.warn('[endgame] fp body', e); P.body = null; } }
+    if (P.body) P.body.g.visible = true;
     RACERS.forEach((R, i) => {
       if (R.player) return;
       if (!R.walker || (KIT && !R.walker.rig)) { if (R.walker) { scene.remove(R.walker.g); } R.walker = makePilot(R); }
@@ -508,7 +450,8 @@ button#egGo[hidden]{display:none}
       if (!walkable(W.g.position.x, W.g.position.z)) W.g.position.set(F.x + rnd(-3, 3), 0, F.z + rnd(-3, 3));
       W.g.position.y = floorAt(W.g.position.x, W.g.position.z);
       W.path = [toW(-1, clamp(toL(W.g.position.x, W.g.position.z)[1], -4, 4), 0), toW(G0 + 1, clamp(R.heli.spot[1] * 0.12, -4, 4), 0), R.heli.door.clone()];
-      W.wp = 0; W.spd = rnd(4.4, 5.6); W.delay = 0.6 + i * 0.35; W.done = false;
+      W.wp = 0; W.spd = rnd(4.2, 5.3); W.delay = 0.5 + i * 0.3 + rnd(0, 0.3); W.done = false; W.climb = -1; W.v = 0; W.t = 0;
+      W.hd = Math.atan2(W.path[0].x - W.g.position.x, W.path[0].z - W.g.position.z) + rnd(-0.5, 0.5); W.g.rotation.y = W.hd + W.yawOff;
     });
     STAGE.beacon.visible = true;
     hud.classList.add('on'); ctl.classList.add('walk'); ctl.classList.remove('fly'); if (TOUCH) ctl.classList.add('on');
@@ -522,7 +465,7 @@ button#egGo[hidden]{display:none}
   function stop() {
     if (!built) { active = false; return; }
     active = false; phase = 'off'; snd.rotorStop();
-    HELIS.forEach(H => { H.root.visible = false; }); RACERS.forEach(R => { if (R.walker) R.walker.g.visible = false; });
+    HELIS.forEach(H => { H.root.visible = false; }); RACERS.forEach(R => { if (R.walker) R.walker.g.visible = false; }); if (P.body) P.body.g.visible = false;
     PILOTS.forEach(p => { p.P.g.visible = false; }); PILOTS.length = 0;
     MS.forEach(m => { m.life = 0; m.m.visible = false; }); TR.forEach(r => { r.m.visible = false; r.cb = null; }); FX.forEach(f => { f.life = 0; f.sp.visible = false; });
     STAGE.beacon.visible = false;
@@ -783,14 +726,32 @@ button#egGo[hidden]{display:none}
     mouse.dx = mouse.dy = 0; tin.look[0] = tin.look[1] = 0;
     wf.set(-Math.sin(P.yaw), 0, -Math.cos(P.yaw)); wr.set(Math.cos(P.yaw), 0, -Math.sin(P.yaw));
     wm.set(0, 0, 0).addScaledVector(wf, I.fwd).addScaledVector(wr, I.side); const L = wm.length(); if (L > 1) wm.divideScalar(L);
-    const sp = 6.5; const nx = P.pos.x + wm.x * sp * dt, nz = P.pos.z + wm.z * sp * dt;
-    if (walkable(nx, nz)) { P.pos.x = nx; P.pos.z = nz; } else if (walkable(nx, P.pos.z)) P.pos.x = nx; else if (walkable(P.pos.x, nz)) P.pos.z = nz;
+    // momentum: ease into a jog, plant to a stop (stick tilt = pace on touch)
+    const vmax = 6.0, acc = L > 0.05 ? 9 : 13;
+    tv.copy(wm).multiplyScalar(vmax); tv2.subVectors(tv, P.vel); const dv = tv2.length(), mx = acc * dt; if (dv > mx) tv2.multiplyScalar(mx / dv); P.vel.add(tv2);
+    const nx = P.pos.x + P.vel.x * dt, nz = P.pos.z + P.vel.z * dt;
+    if (walkable(nx, nz)) { P.pos.x = nx; P.pos.z = nz; } else if (walkable(nx, P.pos.z)) { P.pos.x = nx; P.vel.z *= 0.5; } else if (walkable(P.pos.x, nz)) { P.pos.z = nz; P.vel.x *= 0.5; } else P.vel.multiplyScalar(0.3);
     for (const H of HELIS) { const dx = P.pos.x - H.pos.x, dz = P.pos.z - H.pos.z, d = Math.hypot(dx, dz); if (d < 2.4 && d > 0.01) { P.pos.x = H.pos.x + dx / d * 2.4; P.pos.z = H.pos.z + dz / d * 2.4; } }
     const gy = floorAt(P.pos.x, P.pos.z); P.pos.y += (gy - P.pos.y) * Math.min(1, dt * 12);
-    P.bob += Math.min(1, L) * dt * 9;
-    camera.position.set(P.pos.x, P.pos.y + 1.75 + Math.sin(P.bob) * 0.05 * Math.min(1, L), P.pos.z);
-    camera.up.set(0, 1, 0); camera.rotation.set(P.pitch, P.yaw, 0, 'YXZ');
-    camera.fov += (72 - camera.fov) * Math.min(1, 4 * dt); camera.updateProjectionMatrix();
+    const spd = Math.hypot(P.vel.x, P.vel.z);
+    const yawRate = angWrap(P.yaw - P.lastYaw) / Math.max(dt, 1e-3); P.lastYaw = P.yaw;
+    let eye = null;
+    if (P.body && P.body.rig && P.body.rig.gait) {
+      // full-body first person: your own rider walks under the camera; the camera rides the (hidden) head
+      const B = P.body, bg = B.g;
+      bg.rotation.set(0, P.yaw, 0); bg.position.set(P.pos.x - wf.x * 0.1, P.pos.y, P.pos.z - wf.z * 0.1);
+      // strafing/backpedal: legs still step, body faces the view
+      const steps = B.rig.gait(spd, dt, { turn: yawRate * 0.3 });
+      if (steps && spd > 0.6) snd.step(Math.min(1, 0.35 + spd / 9), deckAt(P.pos.x, P.pos.z));
+      bg.updateMatrixWorld(true);
+      const hb = B.rig.bones.head;
+      if (hb) { eye = hb.getWorldPosition(tv3); eye.y += 0.1; eye.addScaledVector(wf, 0.08); }
+    }
+    if (!eye) { P.bob += Math.min(1, spd / 6) * dt * 9; eye = tv3.set(P.pos.x, P.pos.y + 1.75 + Math.sin(P.bob) * 0.05 * Math.min(1, spd / 6), P.pos.z); }
+    camera.position.copy(eye);
+    P.roll += (clamp(-yawRate * 0.012, -0.04, 0.04) - P.roll) * Math.min(1, dt * 5);
+    camera.up.set(0, 1, 0); camera.rotation.set(P.pitch, P.yaw, P.roll, 'YXZ');
+    camera.fov += (72 + Math.min(4, spd * 0.6) - camera.fov) * Math.min(1, 4 * dt); camera.updateProjectionMatrix();
     const H = me().heli, near = Math.hypot(P.pos.x - H.door.x, P.pos.z - H.door.z) < 4.5 || Math.hypot(P.pos.x - H.pos.x, P.pos.z - H.pos.z) < 6;
     el.boardBtn.classList.toggle('hide', !near);
     if (near) P.boardT += dt; else P.boardT = 0;
@@ -800,20 +761,47 @@ button#egGo[hidden]{display:none}
     state.x = P.pos.x; state.y = P.pos.y; state.z = P.pos.z;
   }
   function board() {
-    phase = 'fly'; const H = me().heli; H.st = 'spool'; H.t = 0;
+    phase = 'fly'; const H = me().heli; H.st = 'spool'; H.t = 0; if (P.body) P.body.g.visible = false;
     ctl.classList.remove('walk'); ctl.classList.add('fly'); el.boardBtn.classList.add('hide');
     STAGE.beacon.visible = false; snd.rotorStart();
     camP.copy(camera.position); heliFwd(H, aT); camL.copy(camera.position).addScaledVector(wf.set(-Math.sin(P.yaw), 0, -Math.cos(P.yaw)), 20);
     toast('ROTORS SPINNING UP…', 1600);
   }
+  const angWrap = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
   function walkersUpdate(dt) {
     for (const R of RACERS) {
       const W = R.walker; if (!W || W.done) continue;
-      if (W.delay > 0) { W.delay -= dt; poseWalk(W, dt, 0); continue; }
-      const T = W.path[W.wp]; aT.set(T.x - W.g.position.x, 0, T.z - W.g.position.z); const d = aT.length();
-      if (d < 0.8) { W.wp++; if (W.wp >= W.path.length) { W.done = true; W.g.visible = false; R.heli.st = 'spool'; R.heli.t = 0; feed(R.name + ' is in the cockpit', hex(R.col)); } continue; }
-      aT.divideScalar(d); W.g.position.x += aT.x * W.spd * dt; W.g.position.z += aT.z * W.spd * dt;
-      W.g.position.y = floorAt(W.g.position.x, W.g.position.z); W.g.rotation.y = Math.atan2(aT.x, aT.z) + W.yawOff; poseWalk(W, dt, W.spd);
+      const g = W.g, H = R.heli;
+      if (W.hd == null) { W.hd = g.rotation.y - W.yawOff; W.v = 0; W.t = 0; W.climb = -1; }
+      W.t += dt;
+      // standing by the bike: breathe, glance at the choppers
+      if (W.delay > 0) { W.delay -= dt; const lk = clamp(angWrap(Math.atan2(H.pos.x - g.position.x, H.pos.z - g.position.z) - W.hd), -0.9, 0.9); poseWalk(W, dt, 0, { look: lk }); continue; }
+      // climbing into the cockpit: face the Apache, step up and in
+      if (W.climb >= 0) {
+        W.climb += dt; const k = Math.min(1, W.climb / 0.9);
+        const want = Math.atan2(H.pos.x - g.position.x, H.pos.z - g.position.z); W.hd += angWrap(want - W.hd) * Math.min(1, dt * 8);
+        g.position.x += (H.pos.x - g.position.x) * dt * 1.2; g.position.z += (H.pos.z - g.position.z) * dt * 1.2;
+        g.position.y = floorAt(g.position.x, g.position.z) + Math.sin(k * Math.PI * 0.5) * 1.15;
+        g.rotation.y = W.hd + W.yawOff; poseWalk(W, dt, 1.4 * (1 - k), {});
+        if (k >= 1) { W.done = true; g.visible = false; H.st = 'spool'; H.t = 0; feed(R.name + ' is in the cockpit', hex(R.col)); }
+        continue;
+      }
+      const T = W.path[W.wp], last = W.wp === W.path.length - 1;
+      aT.set(T.x - g.position.x, 0, T.z - g.position.z); const d = aT.length();
+      if (d < (last ? 0.7 : 2.2)) { if (last) { W.climb = 0; continue; } W.wp++; continue; }
+      // steer: limited turn rate -> natural curved paths; avoid the other walkers
+      let want = Math.atan2(aT.x, aT.z);
+      for (const O of RACERS) { const w2 = O.walker; if (!w2 || w2 === W || w2.done || !w2.g.visible) continue; const ox = g.position.x - w2.g.position.x, oz = g.position.z - w2.g.position.z, od = Math.hypot(ox, oz); if (od < 2.2 && od > 0.01) { want += angWrap(Math.atan2(ox, oz) - want) * (2.2 - od) * 0.25; } }
+      const dh = clamp(angWrap(want - W.hd), -3.2 * dt, 3.2 * dt); W.hd += dh;
+      // speed: ease off the start, walk the last few metres, slow down for tight turns
+      const remain = d + (last ? 0 : W.path.slice(W.wp + 1).reduce((s, q, i, arr) => s + (i ? q.distanceTo(arr[i - 1]) : q.distanceTo(T)), 0));
+      let vT = W.spd * clamp(remain / 7, 0.32, 1) * (1 - 0.45 * Math.min(1, Math.abs(angWrap(want - W.hd)) / 1.2));
+      W.v += clamp(vT - W.v, -6 * dt, 3.2 * dt);
+      g.position.x += Math.sin(W.hd) * W.v * dt; g.position.z += Math.cos(W.hd) * W.v * dt;
+      g.position.y += (floorAt(g.position.x, g.position.z) - g.position.y) * Math.min(1, dt * 14);
+      g.rotation.y = W.hd + W.yawOff;
+      const lk = clamp(angWrap(Math.atan2(H.pos.x - g.position.x, H.pos.z - g.position.z) - W.hd), -0.7, 0.7) * 0.5;
+      poseWalk(W, dt, W.v, { turn: dh / Math.max(dt, 1e-3), look: lk });
     }
   }
   const cf = new V3(), cd = new V3();
@@ -970,10 +958,11 @@ button#egGo[hidden]{display:none}
       else if (goT >= 0 && clock - goT > WAR_TIME) endGame('time');
     }
     hudUpdate(dt);
+    if (dbg.camHook) dbg.camHook();
   }
   // test / preview hooks
   const dbg = {
-    board, endGame, tin, STATS, get phase() { return phase; }, get P() { return P; }, get HELIS() { return HELIS; }, get DRAG() { return DRAG; }, get RACERS() { return RACERS; },
+    camHook: null, board, endGame, tin, STATS, get phase() { return phase; }, get P() { return P; }, get HELIS() { return HELIS; }, get DRAG() { return DRAG; }, get RACERS() { return RACERS; },
     get padC() { return padC; }, get deckY() { return deckY; }, get F() { return F; }, get dP() { return dP; }, get sP() { return sP; }, get goT() { return goT; }, get camP() { return camP; },
     kill: (i, by = 0) => { const D = DRAG[i]; if (D && D.alive) kill(D, RACERS[by]); },
     attackMe: (i = 0) => { const D = DRAG[i], H = me().heli; D.st = 'attack'; D.t = 0; D.tgt = H; H.targeted = D; },

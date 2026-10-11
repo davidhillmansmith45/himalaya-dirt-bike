@@ -306,7 +306,89 @@ export function makeRider(gltf, THREE, opts = {}) {
       ik('upperarm_' + side, 'lowerarm_' + side, 'hand_' + side, L2W(lH, tg), dirW(sx * 0.3, fl ? -0.5 : 0, fl ? -0.4 : 1, pole));
     }
   }
-  return { group, update, bones, mesh, motion, walk: (ph, amt, dt) => footPose(ph, amt, dt, 'walk'), flail: (ph, dt) => footPose(ph, 1, dt, 'flail') };
+  // ---------- natural gait (walk -> jog blend): planted stance feet that match ground speed (no skating), heel strike /
+  // roll / toe-off foot pitch, swing arc with knee lift, pelvis bob + sway + yaw with thorax counter-rotation, opposite
+  // arm swing (elbows bend as it becomes a jog), forward lean with speed, lean into turns, stabilised head, idle breathing.
+  const legLen = (bindP.thigh_l.distanceTo(bindP.calf_l) + bindP.calf_l.distanceTo(bindP.foot_l)) * S;
+  const footLen = bindP.foot_l.distanceTo(bindP.ball_l) * S;
+  const toe0 = Math.asin(clamp(-footDirL.y, -0.9, 0.9));
+  const GT = { ph: 0, run: 0, amt: 0, turn: 0, acc: 0, lv: 0, look: 0 };
+  const sstep = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const fz = { l: 0, r: 0 }, fy = { l: 0, r: 0 }, fp = { l: 0, r: 0 }, stm = { l: 0, r: 0 };
+  function gait(v, dt, o = {}) {
+    dt = Math.min(dt || 0.016, 0.05); time += dt;
+    v = Math.max(0, v || 0);
+    GT.run += (clamp((v - 2.8) / 1.8, 0, 1) - GT.run) * Math.min(1, dt * 3.5);
+    GT.amt += (clamp(v / 1.1, 0, 1) - GT.amt) * Math.min(1, dt * 6);
+    GT.turn += (clamp(o.turn || 0, -3, 3) - GT.turn) * Math.min(1, dt * 5);
+    GT.acc += (clamp((v - GT.lv) / Math.max(dt, 1e-3), -8, 8) - GT.acc) * Math.min(1, dt * 4); GT.lv = v;
+    GT.look += ((o.look || 0) - GT.look) * Math.min(1, dt * 3);
+    const run = GT.run, amt = GT.amt;
+    const f = lerp(0.82, 1.36, run) * lerp(0.85, 1.12, clamp(v / 6, 0, 1));          // stride cycles / s
+    const beta = lerp(0.61, 0.38, run);                                               // stance fraction
+    const A = Math.min(v * beta / (2 * f), legLen * 0.46);                            // half stance travel (feet stay planted)
+    const prev = GT.ph; if (amt > 0.03) GT.ph = (GT.ph + dt * f) % 1;
+    let strikes = 0;
+    for (const side of ['l', 'r']) {
+      const off = side === 'l' ? 0 : 0.5, s = (GT.ph + off) % 1, s0 = (prev + off) % 1;
+      if (amt > 0.03 && s < s0) strikes++;
+      let z, y = 0, p = 0, st = 0;
+      if (s < beta) {
+        const k = s / beta; z = -A + 2 * A * k; st = Math.sin(Math.PI * k);
+        if (k < 0.18) p = -0.28 * (1 - k / 0.18) * (1 - 0.6 * run);                 // heel strike: toes up
+        else if (k > 0.62) p = 0.62 * sstep((k - 0.62) / 0.38) * (1 - 0.3 * run);   // heel off -> toe off
+        if (p > 0) y += footLen * (Math.sin(toe0 + p) - Math.sin(toe0));             // pivot on the ball
+      } else {
+        const k = (s - beta) / (1 - beta);
+        z = A - 2 * A * sstep(k);
+        const h = lerp(0.09, 0.3, run) * Math.min(1, A / 0.3 + 0.25);
+        y = h * Math.sin(Math.PI * Math.pow(k, lerp(1, 0.7, run)));
+        z += run * 0.22 * Math.sin(Math.PI * Math.min(1, k * 1.6)) * Math.min(1, A / 0.4);   // heel kicks up behind when jogging
+        p = k < 0.35 ? 0.55 * (1 - k / 0.35) : -0.22 * sstep((k - 0.6) / 0.4);
+      }
+      fz[side] = z * amt; fy[side] = y * amt; fp[side] = p * amt; stm[side] = st;
+    }
+    // pelvis: inverted-pendulum bob when walking, compress-at-midstance when jogging, sway over the stance foot
+    const mStance = Math.max(stm.l, stm.r);
+    const bob = ((mStance - 0.55) * 0.05 * (1 - run) + (0.45 - mStance) * 0.075 * run) * amt;
+    const drop = (legLen - Math.sqrt(Math.max(0.01, legLen * legLen - A * A))) * 0.55 + 0.03 * run * amt;
+    loc('foot_l', lF); const sL = Math.sign(lF.x) || -1;
+    const sway = (stm.l * sL - stm.r * sL) * 0.03 * (1 - run) * amt + Math.sin(time * 0.45) * 0.012 * (1 - amt);
+    for (const n in restQ) bones[n].quaternion.copy(restQ[n]);
+    const breath = Math.sin(time * 1.6) * 0.006 * (1 - amt * 0.5);
+    inner.position.set(sway, -0.03 - drop + bob + breath * 0.3, 0);
+    group.updateMatrixWorld(true); group.getWorldQuaternion(gq);
+    dirW(1, 0, 0, axX); dirW(0, 0, -1, axZ); dirW(0, 1, 0, axY);
+    const yaw = sL * 0.13 * (-(fz.l) / Math.max(0.15, A)) * Math.min(1, A / 0.35);
+    const leanF = (0.03 + 0.15 * run) * amt + clamp(GT.acc * 0.02, -0.08, 0.1);
+    const leanT = clamp(-GT.turn * 0.045 * clamp(v / 3, 0.3, 1.4), -0.12, 0.12);
+    rotWorld('pelvis', axY, yaw); rotWorld('pelvis', axZ, leanT - (stm.l - stm.r) * 0.035 * (1 - run) * amt * sL);
+    rotWorld('pelvis', axX, -leanF * 0.4);
+    rotWorld('spine_01', axX, -leanF * 0.3 - breath); rotWorld('spine_02', axX, -leanF * 0.3); rotWorld('spine_03', axX, breath * 2);
+    rotWorld('spine_02', axY, -yaw * 0.6 + GT.look * 0.15); rotWorld('spine_03', axY, -yaw * 0.75 + GT.look * 0.15);
+    rotWorld('spine_02', axZ, -leanT * 0.4);
+    rotWorld('neck_01', axX, leanF * 0.55); rotWorld('head', axX, leanF * 0.35 + 0.04 - bob * 1.5);
+    rotWorld('head', axY, yaw * 0.25 + GT.look * 0.7);
+    rotWorld('clavicle_l', axZ, -0.06); rotWorld('clavicle_r', axZ, 0.06);
+    for (const side of ['l', 'r']) {
+      loc('foot_' + side, lF); const sx = Math.sign(lF.x) || 1;
+      lF.x *= lerp(1, 0.78, run * amt); lF.z += fz[side]; lF.y += fy[side];
+      ik('thigh_' + side, 'calf_' + side, 'foot_' + side, L2W(lF, tg), dirW(sx * 0.12, 0.1, -1, pole));
+      const pp = toe0 + fp[side];
+      orient('foot_' + side, side === 'l' ? footDirL : footDirR, up0, dirW(sx * 0.08, -Math.sin(pp), -Math.cos(pp), dA), dirW(0, 1, 0, dB));
+      // arms swing opposite to the legs; bent elbows when jogging
+      loc('upperarm_' + side, lS);
+      const sw = lerp(0.2, 0.3, run) * amt * Math.min(1, A / 0.3 + 0.2);
+      const zN = fz[side === 'l' ? 'r' : 'l'] / Math.max(0.15, A * amt || 0.15);
+      const hz = lS.z + zN * sw - 0.05 * run * amt + 0.02;
+      const hy = lS.y - armLen * lerp(0.93, 0.6, run * amt) + Math.max(0, -zN) * 0.06 * run;
+      lH.set(lS.x + sx * lerp(0.1, 0.06, run), hy, hz);
+      ik('upperarm_' + side, 'lowerarm_' + side, 'hand_' + side, L2W(lH, tg), dirW(sx * 0.35, -0.1, 1, pole));
+    }
+    return strikes;
+  }
+  return { group, update, bones, mesh, motion, gait, gaitState: GT, walk: (ph, amt, dt) => footPose(ph, amt, dt, 'walk'), flail: (ph, dt) => footPose(ph, 1, dt, 'flail') };
 }
 
 // MX gear material (jersey/pants/boots colours + back name/number decal); opts: { name, num, main: THREE.Color, accent: css }
