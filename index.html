@@ -1188,6 +1188,29 @@ vec3 triN(sampler2D t, vec3 p, vec3 bw, float sc, out float lum) {
       if (d2f > 0.0) { float l2; vec3 d2 = triN(tRock, vTW, bw, 1.0 / 9.0, l2); alb *= mix(1.0, clamp(l2, 0.4, 1.7), 0.5 * d2f * rk); dn += d2 * 1.1 * d2f; }`}
       n = normalize(n + dn * rk);
     }
+    // Alpine zonation on the lower flanks (Imja valley ~4300-5000 m): olive/brown tundra scrub on
+    // gentle ground, pale talus/scree fans on moderate slopes, dark bare rock on steep walls.
+    {
+      float lo = 1.0 - smoothstep(170.0, 330.0, vTW.y);
+      if (lo > 0.0) {
+        float gA = texture2D(tDetail, vTW.xz * 0.0061 + 0.17).g, gB = texture2D(tDetail, vTW.xz * 0.023).r;
+        float slp = 1.0 - n.y;
+        vec3 tundra = mix(vec3(0.20, 0.19, 0.11), vec3(0.27, 0.22, 0.14), smoothstep(0.35, 0.7, gA)) * (0.8 + 0.4 * gB);
+        vec3 scree = vec3(0.29, 0.275, 0.25) * (0.78 + 0.45 * gB);
+        vec3 rockD = alb * 0.8;
+        float wT = (1.0 - smoothstep(0.10, 0.26, slp + (gA - 0.5) * 0.12));
+        float wS = smoothstep(0.12, 0.24, slp + (gB - 0.5) * 0.1) * (1.0 - smoothstep(0.38, 0.55, slp));
+        vec3 z = mix(rockD, scree, wS);
+        z = mix(z, tundra, wT);
+        float keep = 0.25;   // keep some of the real satellite colour variation
+        alb = mix(alb, mix(z, z * (alb / max(dot(alb, vec3(0.333)), 0.02)) * 0.333 * 3.0 * 0.5 + z * 0.5, keep), lo * mtn * 0.85);
+        // mid-scale relief on the gentle flanks too, so they don't read as smooth blobs
+        float lm; vec3 dm = triN(tRock, vTW, bw, 1.0 / 120.0, lm);
+        float fm = lo * (1.0 - smoothstep(300.0, 4000.0, dist));
+        n = normalize(n + dm * 0.8 * fm);
+        alb *= mix(1.0, clamp(lm, 0.6, 1.4), 0.5 * fm);
+      }
+    }
     // snow: baked DEM/wind mask, broken up by an aerial snow scan -> crisp snowline, rock poking through
     float snow = 0.0;
     vec3 s1 = texture2D(tSnow, vTW.xz / 70.0).rgb;
@@ -1252,16 +1275,21 @@ vec3 triN(sampler2D t, vec3 p, vec3 bw, float sc, out float lum) {
       sn *= smoothstep(0.55, 0.82, wn.y);   // steep faces shed snow -> dark rock bands
       galb = mix(galb, rubble * 0.75, alp * (1.0 - smoothstep(0.5, 0.8, wn.y)));
       galb = mix(galb, vec3(0.60, 0.63, 0.69) * (0.82 + 0.25 * g2), sn);
+      // banks and moraine walls: scree then rock instead of flat turf
+      float gs = 1.0 - wn.y;
+      vec3 gscree = vec3(0.17, 0.16, 0.145) * (0.75 + 0.5 * g2) * (0.85 + 0.3 * g1);
+      galb = mix(galb, gscree, smoothstep(0.10, 0.22, gs + (g3 - 0.5) * 0.08) * (1.0 - alp));
+      galb = mix(galb, galb * vec3(1.12, 1.0, 0.82), smoothstep(0.45, 0.7, g3) * 0.6);   // dry, sun-bleached tussock patches
       float gndl = max(dot(wn, uSunDir), 0.0);
       vec3 lit = galb * (vec3(1.0, 0.93, 0.82) * 3.6 * gndl * rtShadow + vec3(0.36, 0.50, 0.85) * 0.64 * (0.55 + 0.45 * wn.y));
       vec3 ground = acesT(lit * 0.78);
-      c = mix(ground, c, smoothstep(0.0, 1.0, vMask));
+      c = mix(ground, c, smoothstep(0.0, 1.0, clamp(vMask + (g3 - 0.5) * 0.35 * vMask * (1.0 - vMask) * 4.0, 0.0, 1.0)));
     }
     outgoingLight = atmosApply(c, cameraPosition, vTW);
   }
   #include <opaque_fragment>`);
   };
-  mat.customProgramCacheKey = () => 'terrainV6' + (IS_MOBILE ? 'm' : 'd');
+  mat.customProgramCacheKey = () => 'terrainV7' + (IS_MOBILE ? 'm' : 'd');
   return mat;
 }
 
@@ -2603,6 +2631,61 @@ function finalizeGlbBike(gltf) {
     wheelAction.play(); wheelAction.timeScale = 0; useClip = true;
   }
   root.userData.wheels = wheelNodes;
+  // Steering assembly: re-pivot front wheel + handlebar (+ new fork legs) about the raked head axis.
+  try {
+    const sm = model.getObjectByName('speedway-bike') || model;
+    const head = new THREE.Vector3(0, 0.98, 0.30), axle = new THREE.Vector3(0, 0.35, 0.71);
+    const axis = head.clone().sub(axle).normalize();
+    const pivot = new THREE.Group(); pivot.name = 'steer-pivot'; pivot.position.copy(head);
+    sm.add(pivot); sm.updateMatrixWorld(true);
+    const parts = []; sm.children.forEach(c => { if (c.name === 'wheel-front' || c.name === 'handlebar' || c.name === 'speedway-bike_13') parts.push(c); });
+    parts.forEach(c => pivot.attach(c));
+    // the front fender / number plate / fork crowns are baked into the body meshes: split off the
+    // triangles that sit ahead of the steering head and hang them on the pivot too
+    const smInv = new THREE.Matrix4().copy(sm.matrixWorld).invert();
+    const bodies = []; sm.children.forEach(c => { if (/^speedway-bike_(8|9|11)$/.test(c.name)) bodies.push(c); });
+    bodies.forEach(node => node.traverse(o => {
+      if (!o.isMesh) return;
+      const g = o.geometry, I = g.index, vi = (t, k) => I ? I.getX(t * 3 + k) : t * 3 + k;
+      const M = new THREE.Matrix4().multiplyMatrices(smInv, o.matrixWorld);
+      const P = g.attributes.position, nT = (I ? I.count : P.count) / 3, v = new THREE.Vector3();
+      const front = new Uint8Array(nT); let nf = 0;
+      for (let t = 0; t < nT; t++) {
+        let cz = 0, cy = 0;
+        for (let k = 0; k < 3; k++) { v.fromBufferAttribute(P, vi(t, k)).applyMatrix4(M); cz += v.z / 3; cy += v.y / 3; }
+        // ahead of the raked steering axis line (through head -> axle)
+        const zAxis = head.z + (head.y - cy) * (axle.z - head.z) / (head.y - axle.y);
+        if (cz > zAxis + 0.04 && cy > 0.25) { front[t] = 1; nf++; }
+      }
+      if (!nf) return;
+      const mk = (want) => {
+        const ng = new THREE.BufferGeometry();
+        for (const key in g.attributes) {
+          const A = g.attributes[key], isz = A.itemSize, get = ['getX', 'getY', 'getZ', 'getW'];
+          const out = new Float32Array(((want ? nf : nT - nf) * 3) * isz); let w = 0;
+          for (let t = 0; t < nT; t++) if (!!front[t] === want) for (let k = 0; k < 3; k++) { const ix = vi(t, k); for (let c = 0; c < isz; c++) out[w++] = A[get[c]](ix); }
+          ng.setAttribute(key, new THREE.BufferAttribute(out, isz));
+        }
+        return ng;
+      };
+      const fm2 = new THREE.Mesh(mk(true), o.material); fm2.castShadow = o.castShadow; fm2.receiveShadow = o.receiveShadow;
+      o.geometry = mk(false);
+      o.add(fm2); pivot.attach(fm2);
+    }));
+    const len = head.distanceTo(axle) + 0.05;
+    const fm = new THREE.MeshStandardMaterial({ color: 0x2a2c30, metalness: 0.85, roughness: 0.3 });
+    const um = new THREE.MeshStandardMaterial({ color: 0xd8a020, metalness: 0.9, roughness: 0.22 });
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+    [-0.085, 0.085].forEach(x => {
+      const up = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, len * 0.55, 10), fm);
+      const lo = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, len * 0.5, 10), um);
+      up.quaternion.copy(q); lo.quaternion.copy(q);
+      up.position.copy(axis).multiplyScalar(-len * 0.3).add(new THREE.Vector3(x, 0, 0));
+      lo.position.copy(axis).multiplyScalar(-len * 0.75).add(new THREE.Vector3(x, 0, 0));
+      up.castShadow = lo.castShadow = true; pivot.add(up, lo);
+    });
+    root.userData.steerPivot = pivot; root.userData.steerAxis = axis;
+  } catch (e) { console.warn('[bike] steer pivot', e); }
   root.userData.mixer = mixer; root.userData.wheelAction = wheelAction;
   root.userData.useClip = useClip; root.userData.rollAxis = 'x';
 
@@ -2864,8 +2947,18 @@ function physics(dt) {
   state.thin = thin;
   state.spin = Math.max(0, (state.spin || 0) - dt);
   state.stallCd = Math.max(0, (state.stallCd || 0) - dt);
-  const steerAuth = THREE.MathUtils.clamp(0.35 + state.speed * 0.04, 0.35, 1.65) * (state.grounded ? 1 : 0.32);
-  state.yaw += steer * 2.15 * steerAuth * dt;
+  // Smooth steering: input ramps in/out (no digital twitch), turn rate is speed-sensitive and
+  // partly driven by the lean (a real bike turns because it leans).
+  const sPrev = state.steerS || 0;
+  state.steerS = sPrev + (steer - sPrev) * Math.min(1, (steer !== 0 ? 5.5 : 8) * dt);
+  const spdN = THREE.MathUtils.clamp(state.speed / 40, 0, 1);
+  const steerAuth = THREE.MathUtils.clamp(0.35 + state.speed * 0.04, 0.35, 1.65) * (state.grounded ? 1 : 0.32) * (1 - 0.22 * spdN);
+  const leanDrive = THREE.MathUtils.clamp(-(state.roll || 0) / 0.3, -1, 1);
+  state.yaw += (0.6 * state.steerS + 0.4 * leanDrive * (state.grounded ? 1 : 0.3)) * 2.25 * steerAuth * dt;
+  // front wheel angle about the raked head: big at walking pace, a few degrees at speed,
+  // with a brief countersteer flick when the input changes
+  const steerAng = state.steerS * THREE.MathUtils.lerp(0.55, 0.07, Math.pow(spdN, 0.7)) - (steer - state.steerS) * 0.06 * spdN;
+  state.steerAng = (state.steerAng || 0) + (steerAng - (state.steerAng || 0)) * Math.min(1, 14 * dt);
   const forward = new THREE.Vector3(Math.sin(state.yaw), 0, -Math.cos(state.yaw));
   const maxSpd = 44 - 24 * ginfo.offT - 10 * cw - 7 * thin; // loose moraine caps speed on the climbs
   if (gas) {
@@ -2984,8 +3077,8 @@ function physics(dt) {
 
   // Tight lean caps — wheels stay visually down; no crazy tilt off berms
   // roll is bike.rotation.z on a -Z-facing model: negative = lean right. Lean INTO the turn.
-  const targetRoll = THREE.MathUtils.clamp(-steer * 0.28 - (g2.lat / HALF_W) * 0.12, -0.32, 0.32);
-  state.roll += (targetRoll - state.roll) * Math.min(1, 10 * dt);
+  const targetRoll = THREE.MathUtils.clamp(-state.steerS * (0.12 + 0.2 * Math.min(1, state.speed / 25)) - (g2.lat / HALF_W) * 0.12, -0.32, 0.32);
+  state.roll += (targetRoll - state.roll) * Math.min(1, 6.5 * dt);
   state.roll = THREE.MathUtils.clamp(state.roll, -0.35, 0.35);
   // Pitch (+ = nose up): follow the ground while grounded, follow the arc in the air
   let targetPitch = state.grounded
@@ -3051,6 +3144,7 @@ function physics(dt) {
   exhaustPts.geometry.attributes.position.needsUpdate = true;
 }
 
+const STEER_SIGN = 1;
 function syncBike(dt) {
   if (dt == null) dt = 0.016;
   bike.position.set(state.x, state.y, state.z);
@@ -3060,6 +3154,7 @@ function syncBike(dt) {
   bike.rotation.x = state.pitch;
   bike.rotation.z = state.roll;
   const spin = state.speed * 0.48;
+  if (bike.userData.steerPivot) bike.userData.steerPivot.quaternion.setFromAxisAngle(bike.userData.steerAxis, -(state.steerAng || 0) * STEER_SIGN);
   if (bike.userData.useClip && bike.userData.mixer && bike.userData.wheelAction) {
     bike.userData.wheelAction.timeScale = Math.max(0, state.speed) * 1.8;
     bike.userData.mixer.update(dt);
@@ -3078,7 +3173,7 @@ function syncBike(dt) {
     rm.spd = state.speed; rm.vy = state.vy; rm.g = state.grounded;
     bike.updateMatrixWorld(true);
     RIDER.update({ roll: state.roll, pitch: state.pitch, speed: state.speed, grounded: state.grounded, airTime: state.airTime,
-      steer: state.running ? (state.inSteer || 0) : 0, gas: state.running && state.inGas, brake: state.running && state.inBrake,
+      steer: state.running ? THREE.MathUtils.clamp((state.steerAng || 0) / 0.35, -1, 1) : 0, gas: state.running && state.inGas, brake: state.running && state.inBrake,
       aLong: rm.aL, aVert: aV, vy: state.vy, land: state.landEv || 0 }, dt);
     state.landEv = 0;
   }
