@@ -34,6 +34,7 @@ export function createEndgame(G) {
 #egStat{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);background:rgba(8,10,14,.5);border-radius:9px;padding:4px 12px;font-size:12px;color:#d8dee8;white-space:nowrap;text-shadow:0 1px 2px #000}
 #egCross{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border:2px solid rgba(140,255,170,.85);border-radius:50%;display:none}
 #egCross:after{content:"";position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px;background:#8cffaa;border-radius:50%}
+#egArrow{position:absolute;width:0;height:0;display:none;pointer-events:none;color:#ff6a4a;font-weight:900;font-size:12px;text-shadow:0 1px 3px #000;white-space:nowrap}#egArrow b{position:absolute;left:-14px;top:-14px;width:28px;height:28px;line-height:28px;text-align:center;font-size:24px;color:#ff4a2a}#egArrow span{position:absolute;left:-40px;top:16px;width:80px;text-align:center}
 #egLock{position:absolute;width:64px;height:64px;margin:-32px 0 0 -32px;border:2px solid #ffcf40;display:none}
 #egLock.lk{border-color:#ff3b2a;box-shadow:0 0 12px rgba(255,60,40,.6)}
 #egLock .hp{position:absolute;left:-2px;right:-2px;bottom:-9px;height:4px;background:rgba(0,0,0,.6)}
@@ -62,7 +63,7 @@ button#egGo[hidden]{display:none}
 `;
   document.head.appendChild(css);
   const hud = document.createElement('div'); hud.id = 'egHud';
-  hud.innerHTML = '<div id="egBoard"></div><div id="egObj"></div><div id="egWarn"></div><div id="egFeed"></div><div id="egStat"></div><div id="egCross"></div><div id="egDot"></div><div id="egLock"><div class="nm"></div><div class="hp"><i></i></div></div>';
+  hud.innerHTML = '<div id="egBoard"></div><div id="egObj"></div><div id="egWarn"></div><div id="egFeed"></div><div id="egStat"></div><div id="egCross"></div><div id="egDot"></div><div id="egArrow"><b>▲</b><span></span></div><div id="egLock"><div class="nm"></div><div class="hp"><i></i></div></div>';
   document.body.appendChild(hud);
   const ctl = document.createElement('div'); ctl.id = 'egCtl';
   ctl.innerHTML = '<div class="zone zl"></div><div class="zone zr"></div><div id="egStick"><div id="egKnob"></div></div>' +
@@ -72,7 +73,7 @@ button#egGo[hidden]{display:none}
   document.body.appendChild(ctl);
   const fade = document.createElement('div'); fade.id = 'egFade'; document.body.appendChild(fade);
   const $ = (id) => document.getElementById(id);
-  const el = { board: $('egBoard'), obj: $('egObj'), warn: $('egWarn'), feed: $('egFeed'), stat: $('egStat'), cross: $('egCross'), dot: $('egDot'), lock: $('egLock'),
+  const el = { board: $('egBoard'), obj: $('egObj'), warn: $('egWarn'), feed: $('egFeed'), stat: $('egStat'), cross: $('egCross'), dot: $('egDot'), lock: $('egLock'), arrow: $('egArrow'),
     lockNm: hud.querySelector('#egLock .nm'), lockHp: hud.querySelector('#egLock .hp i'), stick: $('egStick'), knob: $('egKnob'), boardBtn: ctl.querySelector('.board') };
 
   // ---- touch input: left = virtual stick, right = look drag (walk), buttons
@@ -92,7 +93,12 @@ button#egGo[hidden]{display:none}
     const up = e => { e.preventDefault(); tin.b[k] = false; };
     b.addEventListener('touchstart', dn, { passive: false }); b.addEventListener('touchend', up, { passive: false }); b.addEventListener('touchcancel', up, { passive: false });
     b.addEventListener('mousedown', dn); b.addEventListener('mouseup', up); b.addEventListener('mouseleave', up);
+    b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
   });
+  // a held button/key whose release got lost (finger slid off, tab switch, button hidden mid-press) must never stay latched
+  const clearHeld = () => { for (const k in tin.b) tin.b[k] = false; for (const k in keys) keys[k] = false; tin.sx = tin.sy = 0; tin.stickId = null; tin.lookId = null; if (el.stick) el.stick.style.display = 'none'; mouse && (mouse.l = false); };
+  addEventListener('blur', () => clearHeld()); document.addEventListener('visibilitychange', () => { if (document.hidden) clearHeld(); });
+  addEventListener('touchend', e => { if (!e.touches || e.touches.length === 0) { for (const k in tin.b) tin.b[k] = false; } }, { passive: true });
   // ---- desktop: mouse look (pointer lock), LMB guns, RMB missile, E board
   const mouse = { dx: 0, dy: 0, l: false };
   const lockPtr = () => { try { const r = G.canvas.requestPointerLock && G.canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) {} };
@@ -307,6 +313,10 @@ button#egGo[hidden]{display:none}
   }
   const walkable = (x, z) => { const [u, v] = toL(x, z); return onDeck(u, v) || onRamp(u, v) || Math.hypot(x - F.x, z - F.z) < SUMMIT_R; };
   const RACERS = [], HELIS = [], DRAG = [], PILOTS = [];
+  // whole-map war zone: the terrain is a disc of radius ~6800 around (950,180); soft wall only near its true edge
+  const MAPC = { x: 950, z: 180 }, MAP_R = 6200, MAP_HARD = 6550;
+  const randMapPt = (out, rMax = MAP_R - 400) => { const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * rMax; return out.set(MAPC.x + Math.cos(a) * r, 0, MAPC.z + Math.sin(a) * r); };
+  const ceilAt = (x, z) => Math.max(deckY + 700, TH(x, z) + 450);
 
   function buildStage() {
     const t = FINISH_S / TRACK_LEN, p = pathPoint(t);
@@ -393,7 +403,7 @@ button#egGo[hidden]{display:none}
   const me = () => RACERS[0];
   const P = { pos: new V3(), vel: new V3(), yaw: 0, pitch: 0, bob: 0, boardT: 0, body: null, roll: 0, lastYaw: 0 };   // you, on foot (full-body first person)
   const STATS = { attacks: 0, commits: 0, grabs: 0, throws: 0, dodges: 0, breakFree: 0 };
-  let lastPlayerAtt = -99, schedT = 0, lockD = null, gunD = null, ammo = 16, fallP = null;
+  let flyT = 0, lastPlayerAtt = -99, schedT = 0, lockD = null, gunD = null, ammo = 16, fallP = null;
   const camP = new V3(), camL = new V3();
   const feedMsgs = [];
   function feed(msg, col) { feedMsgs.unshift({ msg, col: col || '#fff', t: 6 }); if (feedMsgs.length > 5) feedMsgs.length = 5; hudT = 0; }
@@ -423,6 +433,7 @@ button#egGo[hidden]{display:none}
   function start() {
     try { DRAGON.cancel(); } catch (e) {}
     if (!built) buildStage();
+    clearHeld(); flyT = 0;
     active = true; phase = 'walk'; clock = 0; goT = -1; result = null; lastPlayerAtt = -99; schedT = 0; ammo = 16; feedMsgs.length = 0; lockD = gunD = null;
     for (const R of RACERS) { R.kills = 0; R.out = false; R.pilot = null; }
     HELIS.forEach(resetHeli);
@@ -536,14 +547,21 @@ button#egGo[hidden]{display:none}
   function dragonStep(D, dt) {
     D.t += dt; D.cd -= dt; const dp = D.d.dpos, e = D.ext;
     if (D.st !== 'dying' && D.d.claw) { D.d.claw(cw); D.cOff.lerp(cw.sub(dp), 0.3); }
-    if (D.st === 'far' || D.st === 'circle') {
-      const far = D.st === 'far';
-      if (!far && D.rad > 560) D.rad = rnd(260, 520);
-      const sp = far ? 75 : 85, sgn = D.d.k % 2 ? -1 : 1;
-      D.ang += sp / D.rad * dt * sgn;
-      const a2 = D.ang + 0.3 * sgn;
-      tv2.set(padC.x + Math.cos(a2) * D.rad, deckY + D.alt + 35 * Math.sin(clock * 0.3 + D.d.k), padC.z + Math.sin(a2) * D.rad);
-      fly(D, tv2, sp, 0.9, dt, 60);
+    if (D.st === 'far') {
+      const sgn = D.d.k % 2 ? -1 : 1;
+      D.ang += 75 / D.rad * dt * sgn;
+      tv2.set(padC.x + Math.cos(D.ang + 0.3 * sgn) * D.rad, deckY + D.alt + 35 * Math.sin(clock * 0.3 + D.d.k), padC.z + Math.sin(D.ang + 0.3 * sgn) * D.rad);
+      fly(D, tv2, 75, 0.9, dt, 60);
+      e.reach = 0; e.roar = false; e.w = 0.9; e.tuck = 0;
+    } else if (D.st === 'circle') {
+      // war patrol: roam waypoints over the WHOLE map (valley to Everest) so there is prey everywhere
+      if (!D.wp || D.wpT <= 0 || Math.hypot(D.wp.x - dp.x, D.wp.z - dp.z) < 120) {
+        D.wp = D.wp || new V3(); randMapPt(D.wp); D.wpT = rnd(25, 45);
+        D.wpAlt = rnd(110, 280);
+      }
+      D.wpT -= dt;
+      tv2.set(D.wp.x, Math.max(TH(D.wp.x, D.wp.z), TH(dp.x, dp.z)) + D.wpAlt + 25 * Math.sin(clock * 0.3 + D.d.k), D.wp.z);
+      fly(D, tv2, 85, 0.7, dt, 70);
       e.reach = 0; e.roar = false; e.w = 0.9; e.tuck = 0;
     } else if (D.st === 'attack') {
       const H = D.tgt;
@@ -602,7 +620,8 @@ button#egGo[hidden]{display:none}
     if (!cand.length) return;
     let r = Math.random() * cand.reduce((s, c) => s + c[1], 0), H = cand[cand.length - 1][0];
     for (const c of cand) { r -= c[1]; if (r <= 0) { H = c[0]; break; } }
-    let D = free[0], bd = 1e18; for (const f of free) { const d = f.d.dpos.distanceToSquared(H.pos) * rnd(0.6, 1.4); if (d < bd) { bd = d; D = f; } }
+    let D = null, bd = 1600 * 1600; for (const f of free) { const d = f.d.dpos.distanceToSquared(H.pos) * rnd(0.6, 1.4); if (d < bd) { bd = d; D = f; } }
+    if (!D) return;
     STATS.attacks++; D.st = 'attack'; D.t = 0; D.tgt = H; H.targeted = D; H.lastAtt = war;
     if (H.owner.player) { lastPlayerAtt = war; feed(D.name + ' is hunting YOU!', '#ff5a4a'); }
   }
@@ -614,11 +633,18 @@ button#egGo[hidden]{display:none}
   function heliMove(H, dt, vDes, lift, liftRate) {
     H.vel.x += (vDes.x - H.vel.x) * Math.min(1, 1.5 * dt); H.vel.z += (vDes.z - H.vel.z) * Math.min(1, 1.5 * dt);
     H.vel.y += (lift - H.vel.y) * Math.min(1, liftRate * dt);
+    // soft world edge at the real map boundary only (steer velocity back inward, never teleport)
+    let dx = H.pos.x - MAPC.x, dz = H.pos.z - MAPC.z, r = Math.hypot(dx, dz);
+    if (r > MAP_R) { const k = (r - MAP_R) / (MAP_HARD - MAP_R), ox = dx / r, oz = dz / r, vo = H.vel.x * ox + H.vel.z * oz; if (vo > 0) { H.vel.x -= ox * vo * Math.min(1, k + 0.3); H.vel.z -= oz * vo * Math.min(1, k + 0.3); } H.vel.x -= ox * 25 * k * dt * 10; H.vel.z -= oz * 25 * k * dt * 10; }
     H.pos.addScaledVector(H.vel, dt);
-    const fl = heliFloor(H.pos.x, H.pos.z); if (H.pos.y < fl) { H.pos.y += (fl - H.pos.y) * Math.min(1, dt * 8); if (H.vel.y < 0) H.vel.y = 0; }
-    if (H.pos.y > deckY + 650) { H.pos.y = deckY + 650; H.vel.y = Math.min(0, H.vel.y); }
-    const dx = H.pos.x - padC.x, dz = H.pos.z - padC.z, r = Math.hypot(dx, dz);
-    if (r > 1250) { H.pos.x = padC.x + dx / r * 1250; H.pos.z = padC.z + dz / r * 1250; }
+    dx = H.pos.x - MAPC.x; dz = H.pos.z - MAPC.z; r = Math.hypot(dx, dz);
+    if (r > MAP_HARD) { H.pos.x = MAPC.x + dx / r * MAP_HARD; H.pos.z = MAPC.z + dz / r * MAP_HARD; }
+    // terrain: hard floor with look-ahead so rising slopes lift you instead of swallowing you; downward speed is cancelled
+    // but upward commands are never touched, so you can always climb back out from a landed / scraping state
+    const fl = heliFloor(H.pos.x, H.pos.z), fa = heliFloor(H.pos.x + H.vel.x * 0.6, H.pos.z + H.vel.z * 0.6);
+    if (H.pos.y < fl) { H.pos.y = fl; if (H.vel.y < 0) H.vel.y = 0; H.grounded = true; } else H.grounded = H.pos.y < fl + 0.6;
+    if (fa > H.pos.y && H.vel.y < (fa - H.pos.y) / 0.6) H.vel.y = Math.min(60, (fa - H.pos.y) / 0.6);
+    const cl = ceilAt(H.pos.x, H.pos.z); if (H.pos.y > cl) { H.pos.y = cl; H.vel.y = Math.min(0, H.vel.y); }
   }
   function heliPose(H, dt, fwdIn, turnIn) {
     H.pv += (clamp(fwdIn, -1, 1) * 0.2 - H.pv) * Math.min(1, 3 * dt); H.rv += (clamp(turnIn, -1, 1) * 0.32 - H.rv) * Math.min(1, 3 * dt);
@@ -654,13 +680,14 @@ button#egGo[hidden]{display:none}
   function aiHeli(H, dt) {
     const R = H.owner, sk = R.skill || 0.95;
     H.retgt -= dt;
-    if (!H.tgtD || !H.tgtD.alive || H.retgt <= 0) { H.retgt = rnd(5, 9); let b = null, bd = 1e18; for (const D of DRAG) if (D.alive) { const d = D.d.dpos.distanceToSquared(H.pos) * rnd(0.7, 1.3); if (d < bd) { bd = d; b = D; } } H.tgtD = b; }
+    if (!H.tgtD || !H.tgtD.alive || H.retgt <= 0) { H.retgt = rnd(5, 9); let b = null, bd = 1e18; for (const D of DRAG) if (D.alive && D.st !== 'dying') { let n = 0; for (const O of HELIS) if (O !== H && O.tgtD === D) n++; const d = D.d.dpos.distanceToSquared(H.pos) * rnd(0.7, 1.3) * (1 + n * 0.8); if (d < bd) { bd = d; b = D; } } H.tgtD = b; }
     const D = H.tgtD;
-    aDes.copy(padC).add(aT.set(Math.cos(clock * 0.2 + R.id) * 120, 60, Math.sin(clock * 0.2 + R.id) * 120));
+    aDes.copy(H.pos); aDes.y = TH(H.pos.x, H.pos.z) + 120;
     if (D) {
       aT.subVectors(H.pos, D.d.dpos); aT.y = 0; if (aT.lengthSq() < 1) aT.set(1, 0, 0); aT.normalize();
       const sw = Math.sin(clock * 0.25 + R.id * 1.7) * 90;
-      aDes.copy(D.d.dpos).addScaledVector(aT, 170 + 40 * Math.sin(clock * 0.4 + R.id)); aDes.x += -aT.z * sw; aDes.z += aT.x * sw;
+      const far = H.pos.distanceTo(D.d.dpos) > 500;
+      aDes.copy(D.d.dpos).addScaledVector(D.d.dir, far ? D.spd * 2 : 0).addScaledVector(aT, 170 + 40 * Math.sin(clock * 0.4 + R.id)); aDes.x += -aT.z * sw; aDes.z += aT.x * sw;
       aDes.y = D.d.dpos.y - 10 + 25 * Math.sin(clock * 0.35 + R.id);
     }
     const thr = H.targeted;
@@ -669,17 +696,20 @@ button#egGo[hidden]{display:none}
       if (H.dodgeRoll) { aT.subVectors(H.pos, thr.d.dpos).normalize(); aDes.copy(H.pos); aDes.x += -aT.z * 140; aDes.z += aT.x * 140; aDes.y += 40; }
     } else H.dodgeRoll = null;
     for (const O of HELIS) { if (O === H || O.st !== 'fly') continue; aT.subVectors(H.pos, O.pos); const d = aT.length(); if (d < 30 && d > 0.01) aDes.addScaledVector(aT, (30 - d) * 3 / d); }
-    aV.subVectors(aDes, H.pos); const vy = clamp(aV.y * 0.8, -26, 26); aV.y = 0; const L = aV.length(); if (L > 1e-3) aV.multiplyScalar(Math.min(80, L * 0.8) / L);
+    // terrain avoidance: keep clear of the ground under the chopper, ahead of it, and at the goal
+    { const tA = Math.max(TH(H.pos.x, H.pos.z), TH(H.pos.x + H.vel.x * 2, H.pos.z + H.vel.z * 2), TH(H.pos.x + H.vel.x * 4, H.pos.z + H.vel.z * 4), TH(aDes.x, aDes.z)); aDes.y = clamp(aDes.y, tA + 45, ceilAt(aDes.x, aDes.z) - 20); }
+    aV.subVectors(aDes, H.pos); const vy = clamp(aV.y * 0.8, -40, 70); aV.y = 0; const L = aV.length(); if (L > 1e-3) aV.multiplyScalar(Math.min(L > 600 ? 100 : 85, L * 0.8) / L);
     heliMove(H, dt, aV, vy, 1.6);
     let dy = 0;
     if (D) {
-      const yd = Math.atan2(D.d.dpos.x - H.pos.x, D.d.dpos.z - H.pos.z); dy = yd - H.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
-      H.yaw += clamp(dy, -1.6 * dt, 1.6 * dt);
+      const tl = D.d.dpos.distanceTo(H.pos) / 600, lx = D.d.dpos.x + D.d.dir.x * D.spd * tl, lz = D.d.dpos.z + D.d.dir.z * D.spd * tl;
+      const yd = Math.atan2(lx - H.pos.x, lz - H.pos.z); dy = yd - H.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
+      H.yaw += clamp(dy, -2.0 * dt, 2.0 * dt);
       const dist = D.d.dpos.distanceTo(H.pos);
       H.fireCd -= dt;
-      if (Math.abs(dy) < 0.2 && dist < 560) { while (H.fireCd <= 0) { H.fireCd += 1 / 6; shoot(H, D, 2.4, 0.66 * sk); } }
+      if (Math.abs(dy) < 0.25 && dist < 620) { while (H.fireCd <= 0) { H.fireCd += 1 / 6; shoot(H, D, 2.4, 0.42 * sk); } }
       else H.fireCd = Math.max(H.fireCd, 0);
-      H.mslCd -= dt; if (H.mslCd <= 0 && Math.abs(dy) < 0.5 && dist < 1100) { H.mslCd = rnd(8, 12); launchMissile(H, D); }
+      H.mslCd -= dt; if (H.mslCd <= 0 && Math.abs(dy) < 0.5 && dist < 1100) { H.mslCd = rnd(12, 18); launchMissile(H, D); }
     }
     heliFwd(H, aT); heliPose(H, dt, (H.vel.x * aT.x + H.vel.z * aT.z) / 80, clamp(-dy * 2, -1, 1));
   }
@@ -715,7 +745,8 @@ button#egGo[hidden]{display:none}
     const fwd = ((k.KeyW || k.ArrowUp) ? 1 : 0) - ((k.KeyS || k.ArrowDown) ? 1 : 0) - tin.sy;
     const side = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) + tin.sx;
     const turn = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0);
-    const lift = ((k.Space || k.KeyE || tin.b.up) ? 1 : 0) - ((k.ShiftLeft || k.ShiftRight || k.KeyQ || k.KeyC || tin.b.dn) ? 1 : 0);
+    const upIn = !!(k.Space || k.KeyE || k.PageUp || tin.b.up), dnIn = !!(k.ShiftLeft || k.ShiftRight || k.KeyQ || k.KeyC || k.PageDown || tin.b.dn);
+    const lift = upIn ? 1 : (dnIn ? -1 : 0);
     const fire = !!(k.KeyJ || mouse.l || tin.b.fire);
     return { fwd: clamp(fwd, -1, 1), side: clamp(side, -1, 1), turn, lift, fire };
   }
@@ -818,7 +849,10 @@ button#egGo[hidden]{display:none}
       H.yaw -= turn * 1.55 * dt + mouse.dx * 0.0025;
       const vmax = I.fwd >= 0 ? 88 : 34;
       heliFwd(H, cd).multiplyScalar(I.fwd * vmax);
-      heliMove(H, dt, cd, I.lift * 30, 2.2);
+      // climb always wins over a (possibly latched) descend; holding climb ramps up to a fast ascent so you can get back over the peaks
+      H.climbT = I.lift > 0 ? (H.climbT || 0) + dt : 0;
+      const up = I.lift > 0 ? 40 + Math.min(1, H.climbT / 1.5) * 70 : (I.lift < 0 ? -40 : 0);
+      heliMove(H, dt, cd, up, I.lift !== 0 ? 4 : 2.5);
       heliPose(H, dt, I.fwd, turn);
     }
     mouse.dx = mouse.dy = 0;
@@ -921,6 +955,21 @@ button#egGo[hidden]{display:none}
     el.lock.style.display = lp ? 'block' : 'none';
     if (lp) { el.lock.style.left = lp[0] + 'px'; el.lock.style.top = lp[1] + 'px'; el.lock.classList.toggle('lk', LD === lockD); el.lockNm.textContent = LD.name.toUpperCase() + ' · ' + Math.round(LD.d.dpos.distanceTo(me().heli.pos)) + ' m'; el.lockHp.style.width = Math.max(0, LD.hp / LD.max * 100) + '%'; }
     el.dot.style.display = phase === 'walk' ? 'block' : 'none';
+    // off-screen indicator to the nearest wyvern (big map: always know where to hunt)
+    let showArr = false;
+    if (showAim && !lp) {
+      const H = me().heli; let nd = null, bd = 1e18; for (const D of DRAG) if (D.alive) { const d = D.d.dpos.distanceToSquared(H.pos); if (d < bd) { bd = d; nd = D; } }
+      if (nd && !screen(nd.d.dpos)) {
+        vp.copy(nd.d.dpos).project(camera); let x = vp.x, y = vp.y; if (vp.z > 1) { x = -x; y = -y; }
+        const m = Math.max(Math.abs(x), Math.abs(y), 1e-3); x /= m; y /= m;
+        const W2 = innerWidth / 2, H2 = innerHeight / 2, sx = W2 + x * (W2 - 46), sy = H2 - y * (H2 - 46);
+        el.arrow.style.left = sx + 'px'; el.arrow.style.top = sy + 'px';
+        el.arrow.firstChild.style.transform = 'rotate(' + Math.atan2(x, y) + 'rad)';
+        el.arrow.lastChild.textContent = nd.name + ' ' + (Math.sqrt(bd) > 999 ? (Math.sqrt(bd) / 1000).toFixed(1) + ' km' : Math.round(Math.sqrt(bd)) + ' m');
+        showArr = true;
+      }
+    }
+    el.arrow.style.display = showArr ? 'block' : 'none';
   }
 
   // ======================================================================= main update (called every frame instead of the race physics/camera)
@@ -930,7 +979,7 @@ button#egGo[hidden]{display:none}
     for (const H of HELIS) {
       if (H.owner.player) continue;
       if (H.st === 'spool') { H.t += dt; H.rpm = Math.min(1, H.t / 2); if (H.t > 2.2) { H.st = 'hover'; H.t = 0; } heliPose(H, dt, 0, 0); }
-      else if (H.st === 'hover') { H.t += dt; heliMove(H, dt, aT.set(0, 0, 0), clamp((deckY + 28 + H.owner.id * 3 - H.pos.y) * 0.6, -6, 14), 1.5); H.yaw += Math.sin(clock * 0.3 + H.owner.id) * 0.1 * dt; heliPose(H, dt, 0, 0); if (goT >= 0 && H.t > 0.5) H.st = 'fly'; }
+      else if (H.st === 'hover') { H.t += dt; heliMove(H, dt, aT.set(0, 0, 0), clamp((deckY + 28 + H.owner.id * 3 - H.pos.y) * 0.6, -6, 14), 1.5); H.yaw += Math.sin(clock * 0.3 + H.owner.id) * 0.1 * dt; heliPose(H, dt, 0, 0); if ((goT >= 0 && H.t > 0.5) || H.t > 4) H.st = 'fly'; }
       else if (H.st === 'fly') aiHeli(H, dt);
       else if (H.st === 'held') heldHeli(H);
       else if (H.st === 'recover') recoverHeli(H, dt);
@@ -941,9 +990,10 @@ button#egGo[hidden]{display:none}
     if (phase === 'walk') { walkUpdate(dt); walkersUpdate(dt); }
     else if (phase === 'fly') {
       walkersUpdate(dt); playerFly(dt);
-      if (goT < 0 && MH.st === 'fly' && MH.pos.y > deckY + 10) {
+      if (MH.st === 'fly') flyT += dt;
+      if (goT < 0 && MH.st === 'fly' && (MH.pos.y > heliFloor(MH.pos.x, MH.pos.z) + 8 || flyT > 5)) {
         goT = clock; feed('WYVERNS INBOUND — shoot them down!', '#ffd060'); toast('WYVERNS INBOUND!', 1800);
-        for (const D of DRAG) if (D.st === 'far') { D.st = 'circle'; D.cd = rnd(3, 10); }
+        for (const D of DRAG) if (D.st === 'far') { D.st = 'circle'; D.cd = rnd(3, 10); D.wp = null; }
         for (const R of RACERS) if (R.walker && !R.walker.done) { R.walker.done = true; R.walker.g.visible = false; R.heli.st = 'spool'; R.heli.t = 0; }
       }
     } else if (phase === 'fall') { if (MH.st === 'thrown') thrownHeli(MH, dt); fallCam(dt); }
