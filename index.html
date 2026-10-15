@@ -88,7 +88,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRider, makeGearMaterial } from './rider.js?v=m5';
 import { EV_S0, EV_X, EV_Z, EV_B, ALT_R0, ALT_RSTEP, ALT_R, EV_WP } from './course_everest.js?v=1';
 import { makeOutdoorEnv, makePost, contactShadow, makeGovernor } from './gfx.js?v=1';
-import { createEndgame } from './endgame.js?v=3';
+import { createEndgame } from './endgame.js?v=4';
 
 // Real-terrain backdrop: Khumbu / Imja valley (Dingboche -> Chukhung) + Everest massif, baked from
 // AWS Terrain Tiles (SRTM) DEM + Sentinel-2 cloudless tint. 1 world unit = 4 m.
@@ -2831,6 +2831,7 @@ function reportOnce(tag, e) { if (_reported[tag]) return; _reported[tag] = 1; co
 function reset(fromMenu) {
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[endgame stop]', e); }
   { const eg = document.getElementById('egGo'); if (eg) eg.hidden = true; }
+  { const l2 = document.getElementById('l2Go'); if (l2) l2.hidden = true; }
   Object.assign(state, {
     running: true, finished: false, alive: true, cp: 0, bestAir: 0, sliding: false, warnedGates: false, spin: 0, stallCd: 0,
     kidnapped: null, kidStun: 0, kidImmuneUntil: 0
@@ -5083,6 +5084,31 @@ try {
   const eg = document.getElementById('egGo');
   if (eg) eg.onclick = () => { try { EG.start(); } catch (e) { console.error('[endgame start]', e); } };
 } catch (e) { console.error('[endgame] disabled', e); EG = null; }
+// ---- LEVEL 2: The Great Wall (level2.js, loaded on demand)
+let L2 = null, L2loading = null;
+function startLevel2(opts) {
+  if (L2loading) return L2loading;
+  try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l2] eg stop', e); }
+  L2loading = import('./level2.js?v=1').then(mod => {
+    L2 = mod.createLevel2({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
+      getBike: () => bike, getRider: () => RIDER, syncBike });
+    window.__game.L2 = L2;
+    return L2.start(opts || {});
+  }).catch(e => { console.error('[l2] load', e); L2loading = null; });
+  return L2loading;
+}
+{
+  const ov = document.getElementById('overlay'), eg = document.getElementById('egGo');
+  if (ov && eg) { const b = document.createElement('button'); b.id = 'l2Go'; b.hidden = true; b.textContent = 'LEVEL 2 · FLY TO THE GREAT WALL ▶'; eg.after(b);
+    b.onclick = () => { b.hidden = true; startLevel2(); }; }
+}
+window.__startLevel2 = startLevel2;
+{ // dev shortcut: ?level=2 (cutscene) or ?level=2&l2=race (straight onto the wall)
+  const qp = new URLSearchParams(location.search);
+  if (qp.get('level') === '2') {
+    const tm = setInterval(() => { if (aiReady && bike && bike.userData.isGlb && RIDER) { clearInterval(tm); terrainReady.then(() => startLevel2({ skip: qp.get('l2') })); } }, 250);
+  }
+}
 window.__game = { get EG() { return EG; }, get gfx() { return POST; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null };
 let last = performance.now();
 const _cd = new THREE.Vector3(), _shadowC = new THREE.Vector3(), _lx = new THREE.Vector3(), _ly = new THREE.Vector3();
@@ -5119,6 +5145,14 @@ function frame(now) {
   const rawDt = (now - last) / 1000;
   const dt = Math.min(0.033, (now - last) / 1000);
   last = now;
+  if (L2 && L2.active) {
+    try { L2.update(dt); } catch (e) { reportOnce('level2', e); }
+    try { GOV(rawDt, true); } catch (e) {}
+    if (POST && POST.enabled && !postFailed) { try { POST.render(L2.scene, camera); } catch (e) { postFailed = true; renderer.setRenderTarget(null); renderer.render(L2.scene, camera); } }
+    else renderer.render(L2.scene, camera);
+    requestAnimationFrame(frame);
+    return;
+  }
   propTime.value = now * 0.001;
   const egOn = !!(EG && EG.active);
   if (!window.__game.freeze && !egOn) { physics(dt); syncBike(dt); }

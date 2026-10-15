@@ -1,0 +1,3 @@
+Level 2 (Great Wall) assets
+Elevation: AWS Terrain Tiles (Mapzen terrarium, SRTM NASA/USGS) - Jinshanling area, Hebei, China. https://registry.opendata.aws/terrain-tiles/
+Textures: Poly Haven, CC0 1.0 - castle_brick_02_white, floor_bricks_02, aerial_grass_rock, forest_leaves_02 (https://polyhaven.com)

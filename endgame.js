@@ -912,7 +912,7 @@ button#egGo[hidden]{display:none}
     const board = RACERS.slice().sort((a, b) => (b.kills - a.kills) || (a.out - b.out)).map((R, i) => (i + 1) + '. ' + (R.player ? '<b>45 YOU</b>' : R.num + ' ' + R.name) + ' — <b>' + R.kills + '</b>' + (R.out ? ' 💀' : '')).join(' &nbsp; ');
     p.innerHTML = (result.kind === 'lose' ? 'A wyvern ripped your Apache out of the sky and you hit the mountain. ' : (result.kind === 'time' ? 'Time\u2019s up. ' : 'Every wyvern is down. ')) +
       'You shot down <b>' + me().kills + '</b> ' + (me().kills === 1 ? 'dragon' : 'dragons') + (left ? ' · ' + left + ' still flying' : '') + '.<br><span style="font-size:.85em;opacity:.9">' + board + '</span>';
-    const eg = $('egGo'); if (eg) { eg.hidden = false; eg.textContent = 'REMATCH THE DRAGONS'; }
+    const eg = $('egGo'); if (eg) { eg.hidden = false; eg.textContent = 'REMATCH THE DRAGONS'; } const l2 = $('l2Go'); if (l2) l2.hidden = false;
     const go = $('go'); if (go) go.textContent = 'RIDE AGAIN';
   }
 
