@@ -1,3 +1,6 @@
 Level 2 (Great Wall) assets
 Elevation: AWS Terrain Tiles (Mapzen terrarium, SRTM NASA/USGS) - Jinshanling area, Hebei, China. https://registry.opendata.aws/terrain-tiles/
 Textures: Poly Haven, CC0 1.0 - castle_brick_02_white, floor_bricks_02, aerial_grass_rock, forest_leaves_02 (https://polyhaven.com)
+Realism pass textures (Poly Haven, CC0 1.0): mossy_brick, monastery_stone_floor, pine_bark, leaves_forest_ground, rocky_terrain_02
+Satellite imagery (sat.jpg): Sentinel-2 cloudless 2023 by EOX IT Services GmbH - https://s2maps.eu (contains modified Copernicus Sentinel data 2023), CC BY-NC-SA 4.0.
+Tree leaf cards, grass cards, impostors and noise are procedurally generated for this project.
