@@ -70,6 +70,7 @@ button#egGo[hidden]{display:none}
     '<button class="egb f fire" data-b="fire">FIRE</button><button class="egb f msl" data-b="msl">MSL</button>' +
     '<button class="egb f up" data-b="up">▲</button><button class="egb f dn" data-b="dn">▼</button>' +
     '<button class="egb w board hide" data-b="board">BOARD</button>';
+  if (!TOUCH) { const kh = document.createElement('div'); kh.id = 'egKeys'; kh.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:60;pointer-events:none;font:700 13px system-ui,sans-serif;color:#fff;background:rgba(10,8,4,.55);padding:6px 10px;border-radius:8px;display:none;line-height:1.5'; kh.innerHTML = '▲ UP: Space / R / PgUp &nbsp; ▼ DOWN: Shift / Q / C / X / PgDn<br>W/S fwd·back · A/D/←/→ turn · Mouse aim · LMB/J guns · RMB/F/K missile'; document.body.appendChild(kh); }
   document.body.appendChild(ctl);
   const fade = document.createElement('div'); fade.id = 'egFade'; document.body.appendChild(fade);
   const $ = (id) => document.getElementById(id);
@@ -484,7 +485,7 @@ button#egGo[hidden]{display:none}
     DRAGON_LOD.scale = 1;
     for (const a of AI) a.dismounted = false;
     const rider = G.rider(); if (rider) rider.group.visible = true;
-    hud.classList.remove('on'); ctl.classList.remove('on', 'walk', 'fly');
+    hud.classList.remove('on'); ctl.classList.remove('on', 'walk', 'fly'); { const kh = document.getElementById('egKeys'); if (kh) kh.style.display = 'none'; }
     for (const id of ['stats', 'hint', 'mobile']) { const e = $(id); if (e) e.style.visibility = ''; }
     el.warn.classList.remove('on');
   }
@@ -745,11 +746,14 @@ button#egGo[hidden]{display:none}
     const fwd = ((k.KeyW || k.ArrowUp) ? 1 : 0) - ((k.KeyS || k.ArrowDown) ? 1 : 0) - tin.sy;
     const side = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) + tin.sx;
     const turn = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0);
-    const upIn = !!(k.Space || k.KeyE || k.PageUp || tin.b.up), dnIn = !!(k.ShiftLeft || k.ShiftRight || k.KeyQ || k.KeyC || k.PageDown || tin.b.dn);
-    const lift = upIn ? 1 : (dnIn ? -1 : 0);
+    // E is the board key, so it no longer doubles as climb (a held E from boarding used to keep you rising)
+    const upIn = !!(k.Space || k.KeyR || k.PageUp || tin.b.up), dnIn = !!(k.ShiftLeft || k.ShiftRight || k.KeyQ || k.KeyC || k.KeyX || k.PageDown || tin.b.dn);
+    if (upIn && !upPrev) liftLast = 1; if (dnIn && !dnPrev) liftLast = -1; upPrev = upIn; dnPrev = dnIn;
+    const lift = upIn && dnIn ? liftLast : (upIn ? 1 : (dnIn ? -1 : 0));
     const fire = !!(k.KeyJ || mouse.l || tin.b.fire);
     return { fwd: clamp(fwd, -1, 1), side: clamp(side, -1, 1), turn, lift, fire };
   }
+  let upPrev = false, dnPrev = false, liftLast = 1;
   const wf = new V3(), wr = new V3(), wm = new V3();
   function walkUpdate(dt) {
     const I = inputs();
@@ -792,7 +796,7 @@ button#egGo[hidden]{display:none}
     state.x = P.pos.x; state.y = P.pos.y; state.z = P.pos.z;
   }
   function board() {
-    phase = 'fly'; const H = me().heli; H.st = 'spool'; H.t = 0; if (P.body) P.body.g.visible = false;
+    phase = 'fly'; { const kh = document.getElementById('egKeys'); if (kh) kh.style.display = 'block'; } const H = me().heli; H.st = 'spool'; H.t = 0; if (P.body) P.body.g.visible = false;
     ctl.classList.remove('walk'); ctl.classList.add('fly'); el.boardBtn.classList.add('hide');
     STAGE.beacon.visible = false; snd.rotorStart();
     camP.copy(camera.position); heliFwd(H, aT); camL.copy(camera.position).addScaledVector(wf.set(-Math.sin(P.yaw), 0, -Math.cos(P.yaw)), 20);
@@ -840,7 +844,7 @@ button#egGo[hidden]{display:none}
     const H = me().heli, I = inputs();
     if (H.st === 'spool') {
       H.t += dt; H.rpm = Math.min(1, H.t / 1.6);
-      if (H.t > 1.6) { H.st = 'fly'; toast(TOUCH ? 'TAKE OFF: hold ▲ · stick flies' : 'TAKE OFF: Space climbs · W/A/S/D fly', 3000); }
+      if (H.t > 1.6) { H.st = 'fly'; toast(TOUCH ? 'TAKE OFF: hold ▲ · stick flies' : 'TAKE OFF: Space/R climb · Shift/Q/C descend · W/A/S/D fly', 3000); }
       heliPose(H, dt, 0, 0);
     } else if (H.st === 'held') heldHeli(H);
     else if (H.st === 'recover') recoverHeli(H, dt);
@@ -850,9 +854,11 @@ button#egGo[hidden]{display:none}
       const vmax = I.fwd >= 0 ? 88 : 34;
       heliFwd(H, cd).multiplyScalar(I.fwd * vmax);
       // climb always wins over a (possibly latched) descend; holding climb ramps up to a fast ascent so you can get back over the peaks
-      H.climbT = I.lift > 0 ? (H.climbT || 0) + dt : 0;
-      const up = I.lift > 0 ? 40 + Math.min(1, H.climbT / 1.5) * 70 : (I.lift < 0 ? -40 : 0);
-      heliMove(H, dt, cd, up, I.lift !== 0 ? 4 : 2.5);
+      // climb and descend ramp symmetrically (40 -> 110 m/s over 1.5 s); releasing brakes to a hover quickly
+      if (Math.sign(I.lift) !== (H.liftDir || 0)) { H.climbT = 0; H.liftDir = Math.sign(I.lift); } else H.climbT = (H.climbT || 0) + dt;
+      const agl = H.pos.y - heliFloor(H.pos.x, H.pos.z), dnMax = 40 + Math.min(1, H.climbT / 1.5) * 70;
+      const up = I.lift > 0 ? dnMax : (I.lift < 0 ? -Math.max(8, Math.min(dnMax, agl * 1.2)) : 0);
+      heliMove(H, dt, cd, up, I.lift !== 0 ? 4 : 6);
       heliPose(H, dt, I.fwd, turn);
     }
     mouse.dx = mouse.dy = 0;

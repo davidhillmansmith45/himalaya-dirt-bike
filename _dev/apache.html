@@ -1,0 +1,24 @@
+<!doctype html><html><body style="margin:0;background:#9bb">
+<script type="importmap">{"imports":{"three":"../vendor/three.module.js","three/addons/":"../vendor/addons/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+const { buildApacheKit } = await import('../apache.js?v=' + Date.now());
+const r = new THREE.WebGLRenderer({ antialias: true }); r.setSize(innerWidth, innerHeight); document.body.appendChild(r.domElement);
+r.toneMapping = THREE.ACESFilmicToneMapping; r.shadowMap.enabled = true;
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0x9ab4cc);
+const pm = new THREE.PMREMGenerator(r); sc.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+const sun = new THREE.DirectionalLight(0xfff1dd, 3); sun.position.set(-20, 30, 25); sun.castShadow = true; Object.assign(sun.shadow.camera, { left: -15, right: 15, top: 15, bottom: -15 }); sun.shadow.mapSize.set(2048, 2048); sc.add(sun);
+sc.add(new THREE.HemisphereLight(0xcfe0ff, 0x6a6050, 0.6));
+const gr = new THREE.Mesh(new THREE.PlaneGeometry(200, 200).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x6b6e70, roughness: 0.9 })); gr.receiveShadow = true; sc.add(gr);
+const K = buildApacheKit(THREE, mergeGeometries, { mobile: false });
+const A = K.make(0xff6a00, '45', 'Smith', true); sc.add(A.root);
+const cam = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 500);
+const q = new URLSearchParams(location.search); const az = +(q.get('az') ?? 35) * Math.PI / 180, el = +(q.get('el') ?? 12) * Math.PI / 180, d = +(q.get('d') ?? 30);
+const tgt = new THREE.Vector3(+(q.get('tx') ?? 0), +(q.get('ty') ?? 2.5), +(q.get('tz') ?? -1));
+cam.position.set(tgt.x + Math.sin(az) * Math.cos(el) * d, tgt.y + Math.sin(el) * d, tgt.z + Math.cos(az) * Math.cos(el) * d); cam.lookAt(tgt);
+if (q.get('lo')) A.lod.levels[1].distance = 0.01;
+A.rotor.rotation.y = 0.4;
+r.render(sc, cam); window.done = true;
+</script></body></html>
