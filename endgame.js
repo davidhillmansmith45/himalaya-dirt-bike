@@ -116,6 +116,9 @@ button#egGo[hidden]{display:none}
   const fireTex = radial([[0, 'rgba(255,255,230,1)'], [0.2, 'rgba(255,220,120,1)'], [0.45, 'rgba(255,120,30,.85)'], [0.75, 'rgba(160,40,10,.35)'], [1, 'rgba(0,0,0,0)']]);
   const smokeTex = radial([[0, 'rgba(70,66,62,.85)'], [0.5, 'rgba(60,56,52,.5)'], [1, 'rgba(40,40,40,0)']]);
   const dustTex = radial([[0, 'rgba(190,170,140,.75)'], [0.6, 'rgba(170,150,120,.35)'], [1, 'rgba(150,130,100,0)']]);
+  const bloodTex = canvasTex(64, 64, (g) => { for (let i = 0; i < 9; i++) { const x = 32 + (Math.random() - 0.5) * 26, y = 32 + (Math.random() - 0.5) * 26, r = 5 + Math.random() * 12; const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(120,6,8,.95)'); gr.addColorStop(0.6, 'rgba(90,4,6,.8)'); gr.addColorStop(1, 'rgba(60,0,0,0)'); g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); } });
+  const splatTex = canvasTex(128, 128, (g) => { g.fillStyle = 'rgba(85,3,5,.92)'; g.beginPath(); g.arc(64, 64, 30, 0, 7); g.fill();
+    for (let i = 0; i < 26; i++) { const a = Math.random() * 6.28, d = 28 + Math.random() * 32, r = 2 + Math.random() * 7; g.beginPath(); g.arc(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, r, 0, 7); g.fill(); g.lineWidth = r * 0.8; g.strokeStyle = 'rgba(85,3,5,.85)'; g.beginPath(); g.moveTo(64, 64); g.lineTo(64 + Math.cos(a) * d, 64 + Math.sin(a) * d); g.stroke(); } });
   const sparkTex = radial([[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,230,140,.9)'], [1, 'rgba(255,120,0,0)']]);
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x1d1f1c, roughness: 0.55, metalness: 0.55 });
 
@@ -207,16 +210,16 @@ button#egGo[hidden]{display:none}
   function fx(kind, p, size, life, vel) {
     const f = FX[fxCur]; fxCur = (fxCur + 1) % NFX;
     const m = f.sp.material; const add = kind === 1 || kind === 3;
-    m.map = kind === 0 ? smokeTex : kind === 1 ? fireTex : kind === 2 ? dustTex : sparkTex;
+    m.map = kind === 0 ? smokeTex : kind === 1 ? fireTex : kind === 2 ? dustTex : kind === 4 ? bloodTex : sparkTex;
     if (m.blending !== (add ? THREE.AdditiveBlending : THREE.NormalBlending)) { m.blending = add ? THREE.AdditiveBlending : THREE.NormalBlending; m.toneMapped = !add; m.needsUpdate = true; }
-    f.sp.position.copy(p); f.sp.visible = true; f.life = f.max = life; f.kind = kind; f.g0 = size; f.g1 = size * (kind === 1 ? 2.2 : kind === 3 ? 0.6 : 3.2);
+    f.sp.position.copy(p); f.sp.visible = true; f.life = f.max = life; f.kind = kind; f.g0 = size; f.g1 = size * (kind === 1 ? 2.2 : kind === 3 ? 0.6 : kind === 4 ? 1.6 : 3.2);
     if (vel) f.vel.copy(vel); else f.vel.set(0, 0, 0); m.rotation = Math.random() * 6; f.sp.scale.setScalar(size);
   }
   function fxUpdate(dt) {
     for (const f of FX) {
       if (f.life <= 0) continue; f.life -= dt; if (f.life <= 0) { f.sp.visible = false; continue; }
-      const k = 1 - f.life / f.max; f.sp.position.addScaledVector(f.vel, dt); f.vel.multiplyScalar(Math.exp(-1.2 * dt)); if (f.kind === 0 || f.kind === 2) f.vel.y += 2 * dt;
-      f.sp.scale.setScalar(lerp(f.g0, f.g1, Math.sqrt(k))); f.sp.material.opacity = (f.kind === 1 ? 1 - k * k : (1 - k)) * (f.kind === 0 ? 0.85 : 1);
+      const k = 1 - f.life / f.max; f.sp.position.addScaledVector(f.vel, dt); f.vel.multiplyScalar(Math.exp(-1.2 * dt)); if (f.kind === 0 || f.kind === 2) f.vel.y += 2 * dt; else if (f.kind === 4) { f.vel.y -= 26 * dt; f.vel.multiplyScalar(Math.exp(1.0 * dt)); }
+      f.sp.scale.setScalar(lerp(f.g0, f.g1, Math.sqrt(k))); f.sp.material.opacity = (f.kind === 1 || f.kind === 4 ? 1 - k * k : (1 - k)) * (f.kind === 0 ? 0.85 : 1);
     }
   }
   const ev = new V3(), ep = new V3();
@@ -226,6 +229,18 @@ button#egGo[hidden]{display:none}
     for (let i = 0; i < n; i++) fx(1, ep.copy(c).add(ev.set(rnd(-1, 1), rnd(-0.5, 1), rnd(-1, 1)).multiplyScalar(s * 0.5)), s * rnd(0.6, 1.2), rnd(0.5, 1.0), ev.set(rnd(-1, 1), rnd(0, 1.5), rnd(-1, 1)).multiplyScalar(s * 0.8));
     for (let i = 0; i < n; i++) fx(0, ep.copy(c).add(ev.set(rnd(-1, 1), rnd(0, 1), rnd(-1, 1)).multiplyScalar(s * 0.6)), s * rnd(0.8, 1.3), rnd(1.8, 3.2), ev.set(rnd(-1, 1), rnd(0.5, 2), rnd(-1, 1)).multiplyScalar(s * 0.35));
     const d = camera.position.distanceTo(c); snd.boom(Math.max(0, 1 - d / (big ? 900 : 500)) * (big ? 1 : 0.6));
+  }
+  // dragon blood: spurts at hit points, streaming trail while falling, splatter + ground decal on impact
+  const bv = new V3(), bp = new V3();
+  function blood(p, size, n, spread, up) {
+    for (let i = 0; i < n; i++) fx(4, bp.copy(p).add(bv.set(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).multiplyScalar(size * 0.3)), size * rnd(0.35, 0.8), rnd(0.6, 1.3), bv.set(rnd(-1, 1), rnd(0, 1) + (up || 0), rnd(-1, 1)).multiplyScalar(spread));
+  }
+  const decalG = new THREE.PlaneGeometry(1, 1); decalG.rotateX(-Math.PI / 2);
+  const decalM = new THREE.MeshBasicMaterial({ map: splatTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+  const DEC = []; for (let i = 0; i < 8; i++) { const m = new THREE.Mesh(decalG, decalM); m.visible = false; m.renderOrder = 2; fxGroup.add(m); DEC.push(m); } let decCur = 0;
+  function splat(p, r) {
+    const m = DEC[decCur]; decCur = (decCur + 1) % DEC.length; m.position.set(p.x, TH(p.x, p.z) + 0.3, p.z); m.rotation.y = Math.random() * 6; m.scale.set(r, 1, r); m.visible = true;
+    blood(p, r * 0.5, IS_MOBILE ? 16 : 26, r * 0.9, 1.2);
   }
   // tracers
   const tracerG = new THREE.BoxGeometry(0.22, 0.22, 9); const tracerM = new THREE.MeshBasicMaterial({ color: 0xffd36a, toneMapped: false });
@@ -252,7 +267,7 @@ button#egGo[hidden]{display:none}
       if (D) {
         mv1.subVectors(D.d.dpos, M.pos); const dist = mv1.length(); mv1.normalize(); const v = M.vel.length();
         M.vel.normalize().lerp(mv1, Math.min(1, 3.2 * dt)).normalize().multiplyScalar(Math.min(300, v + 260 * dt));
-        if (dist < 16 * D.S) { explode(M.pos, false); damage(D, 70, M.owner, M.pos); M.life = 0; }
+        if (dist < 16 * D.S) { for (let i = 0; i < 4; i++) fx(1, M.pos, 4 * rnd(0.6, 1.2), rnd(0.3, 0.6)); snd.boom(Math.max(0, 1 - camera.position.distanceTo(M.pos) / 500) * 0.6); damage(D, 70, M.owner, M.pos); M.life = 0; }
       } else M.vel.multiplyScalar(1 + 0.5 * dt);
       M.pos.addScaledVector(M.vel, dt); M.m.position.copy(M.pos); M.m.lookAt(mv2.copy(M.pos).add(M.vel));
       M.smoke -= dt; if (M.smoke <= 0) { M.smoke = IS_MOBILE ? 0.06 : 0.035; fx(0, M.pos, 1.6, 1.4, mv2.set(0, 0.5, 0)); }
@@ -476,7 +491,7 @@ button#egGo[hidden]{display:none}
   }
   function stop() {
     if (!built) { active = false; return; }
-    active = false; phase = 'off'; snd.rotorStop();
+    active = false; phase = 'off'; snd.rotorStop(); DEC.forEach(m => { m.visible = false; });
     HELIS.forEach(H => { H.root.visible = false; }); RACERS.forEach(R => { if (R.walker) R.walker.g.visible = false; }); if (P.body) P.body.g.visible = false;
     PILOTS.forEach(p => { p.P.g.visible = false; }); PILOTS.length = 0;
     MS.forEach(m => { m.life = 0; m.m.visible = false; }); TR.forEach(r => { r.m.visible = false; r.cb = null; }); FX.forEach(f => { f.life = 0; f.sp.visible = false; });
@@ -494,7 +509,7 @@ button#egGo[hidden]{display:none}
   function damage(D, amt, owner, at) {
     if (!D.alive) return;
     D.hp -= amt; D.lastHit = owner;
-    if (at) fx(3, at, 3.5 * D.S, 0.25);
+    if (at) blood(at, 3.5 * D.S, amt > 30 ? 10 : 3, 9 * D.S, 0.3);
     if (D.hp <= 0) kill(D, owner);
   }
   function kill(D, owner) {
@@ -598,10 +613,10 @@ button#egGo[hidden]{display:none}
       D.vel.y -= 26 * dt; D.vel.multiplyScalar(Math.exp(-0.15 * dt));
       dp.addScaledVector(D.vel, dt); D.d.dir.copy(D.vel).normalize();
       e.roll += dt * 2.6; e.tumble = Math.min(1.1, e.tumble + dt * 0.5); e.roar = D.t < 1.5;
-      D.smoke -= dt; if (D.smoke <= 0) { D.smoke = IS_MOBILE ? 0.08 : 0.045; fx(0, dp, 6 * D.S, 2.4, tv.set(0, 2, 0)); if (Math.random() < 0.5) fx(1, dp, 4 * D.S, 0.5); }
+      D.smoke -= dt; if (D.smoke <= 0) { D.smoke = IS_MOBILE ? 0.06 : 0.035; blood(dp, 4 * D.S, 2, 3 * D.S, -0.2); }
       if (dp.y < TH(dp.x, dp.z) + 4 || D.t > 14) {
-        dp.y = Math.max(dp.y, TH(dp.x, dp.z) + 2); explode(dp, true);
-        for (let i = 0; i < 6; i++) fx(2, tv.copy(dp).add(tv2.set(rnd(-12, 12), 0, rnd(-12, 12))), 14, 3, tv3.set(rnd(-6, 6), rnd(3, 8), rnd(-6, 6)));
+        dp.y = Math.max(dp.y, TH(dp.x, dp.z) + 2); splat(dp, 22 * D.S); snd.boom(Math.max(0, 1 - camera.position.distanceTo(dp) / 900));
+        for (let i = 0; i < 4; i++) fx(2, tv.copy(dp).add(tv2.set(rnd(-12, 12), 0, rnd(-12, 12))), 12, 2.5, tv3.set(rnd(-6, 6), rnd(2, 5), rnd(-6, 6)));
         D.st = 'gone'; D.d.gone(); e.roll = e.tumble = 0;
       }
     }
@@ -1020,6 +1035,7 @@ button#egGo[hidden]{display:none}
   const dbg = {
     camHook: null, board, endGame, tin, STATS, get phase() { return phase; }, get P() { return P; }, get HELIS() { return HELIS; }, get DRAG() { return DRAG; }, get RACERS() { return RACERS; },
     get padC() { return padC; }, get deckY() { return deckY; }, get F() { return F; }, get dP() { return dP; }, get sP() { return sP; }, get goT() { return goT; }, get camP() { return camP; },
+    damage: (i, amt, at) => { const D = DRAG[i]; damage(D, amt, RACERS[0], at || D.d.dpos); },
     kill: (i, by = 0) => { const D = DRAG[i]; if (D && D.alive) kill(D, RACERS[by]); },
     attackMe: (i = 0) => { const D = DRAG[i], H = me().heli; D.st = 'attack'; D.t = 0; D.tgt = H; H.targeted = D; },
     grabMe: (i = 0) => grab(DRAG[i], me().heli),

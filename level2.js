@@ -3,6 +3,7 @@
 import { buildApacheKit } from './apache.js?v=1';
 import { makeRider, makeGearMaterial } from './rider.js?v=m5';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { createZombies } from './zombies.js?v=1';
 
 export function createLevel2(C) {
   const { THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries } = C;
@@ -370,6 +371,19 @@ export function createLevel2(C) {
     } catch (e) {}
   }
   const NITRO = { pads: PADS, hits: 0, aiHits: 0 };
+  // ---- zombies (zombies.js): racer views + grab / knock handling
+  let ZM = null, ZV = null;
+  function zViews() {
+    if (ZV) return ZV;
+    ZV = RACERS.map(R => R.player ? { player: true, R, grabbedBy: null, get s() { return PL.s; }, get lat() { return PL.lat; }, get speed() { return PL.speed; }, get boost() { return PL.boost || 0; }, get grounded() { return PL.grounded && !(PL.falling > 0); }, get y() { return PL.y; }, get finished() { return R.finished; } }
+      : { player: false, R, grabbedBy: null, get s() { return R.s; }, get lat() { return R.lat; }, get speed() { return R.spd; }, get boost() { return R.boost || 0; }, get grounded() { return R.grounded; }, get y() { return R.y; }, get finished() { return R.finished; } });
+    return ZV;
+  }
+  function zOnHit(V, kind) {
+    if (kind === 'knock') { if (V.player) { C.state.shake = 0.3; PL.speed *= 0.93; toast(PL.boost > 0 ? 'NITRO SMASH!' : 'ZOMBIE SMASHED!', 900); } else V.R.spd *= 0.93; }
+    else if (kind === 'grab') { if (V.player) { PL.zg = { t: 0, n: 0, last: 0 }; C.state.shake = 0.35; toast(IS_TOUCH ? 'ZOMBIE GRAB! Tap ← → fast to shake it off' : 'ZOMBIE GRAB! Mash A/D (← →) to shake it off', 1800); } else V.R.zgT = 0; }
+  }
+  const IS_TOUCH = matchMedia('(hover:none)').matches;
 
   function buildRamps() {
     const m = mats();
@@ -708,6 +722,7 @@ export function createLevel2(C) {
       if (!built) {
         [D] = await Promise.all([loadData(), loadKit()]);
         buildSky(); buildTerrain(); buildWall(); buildTowers(); buildRamps(); buildNitro(); buildPlaza();
+        try { ZM = createZombies({ THREE, scene, frame, HW, PAR, D, inGap, towerAt, pads: PADS, IS_MOBILE, SFX: C.SFX, camera }); } catch (e) { console.warn('[l2] zombies', e); ZM = null; }
         banner(D.start, 'START · 起点', '#a3140c'); banner(D.finish, 'FINISH · 终点', '#c08a10');
         for (const g of D.gaps) { const f = frame(g[1] + 12, { ..._f }); }
         built = true;
@@ -846,6 +861,7 @@ export function createLevel2(C) {
   // ------------------------------------------------------------------ race
   let cdT = 0;
   function toCountdown() {
+    if (ZM) ZM.reset(); if (ZV) ZV.forEach(V => { V.grabbedBy = null; }); PL.zg = null;
     phase = 'countdown'; clock = 0; cdT = 3.2; ui.skip.style.display = 'none'; showHud(true);
     RACERS.forEach(R => { if (R.walker) R.walker.g.visible = false; if (R.heli) { R.heli.pos.copy(spotW(...HSPOTS[RACERS.indexOf(R)])); R.heli.root.position.copy(R.heli.pos); const f = frame(D.start, { ..._f }); R.heli.root.rotation.set(0, Math.atan2(f.tx, f.tz), 0); R.heli.rpm = 0.12; } });
     setRidersVisible(true); placeBikes();
@@ -862,6 +878,14 @@ export function createLevel2(C) {
     const fin = RACERS[0] && RACERS[0].finished;   // past the line: inputs off, auto-brake, hold the walkway line
     const gas = !fin && (keys.KeyW || keys.ArrowUp) ? 1 : 0, brake = !fin && (keys.KeyS || keys.ArrowDown) ? 1 : 0;
     const steer = fin ? 0 : ((keys.KeyD || keys.ArrowRight) ? 1 : 0) - ((keys.KeyA || keys.ArrowLeft) ? 1 : 0);
+    const zv = ZV && ZV[0];
+    if (zv && zv.grabbedBy && !fin) {   // a zombie is hanging on: no drive, bike bogs down; alternate steer to shake it off
+      const g = P.zg || (P.zg = { t: 0, n: 0, last: 0 }); g.t += dt;
+      if (steer && steer !== g.last) { g.n++; g.last = steer; C.state.shake = 0.15; }
+      P.speed *= Math.exp(-5 * dt);
+      if (g.n >= 5 || g.t > 2.6) { ZM.release(zv, g.n >= 5 ? 'shake' : 'auto'); toast(g.n >= 5 ? 'SHOOK IT OFF!' : 'BROKE FREE', 900); P.zg = null; }
+    }
+    const zHeld = !!(zv && zv.grabbedBy);
     if (fin) { P.boost = 0; P.speed = Math.max(0, P.speed - 13 * dt); const f = frame(P.s, { ..._f }); let dy = yawOf(f) - P.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI; P.yaw += dy * Math.min(1, 4 * dt); P.lat *= Math.exp(-1.5 * dt); }
     if (keys.KeyR && !P.rHeld) { P.rHeld = true; respawn(); return; } if (!keys.KeyR) P.rHeld = false;
     S.inGas = gas; S.inBrake = brake; S.inSteer = steer;
@@ -884,7 +908,7 @@ export function createLevel2(C) {
       P.speed += 34 * dt * Math.max(0, 1 - P.speed / 50);
     }
     if (P.grounded) {
-      if (gas) P.speed += 21 * dt * (1 - P.speed / 33);
+      if (gas && !zHeld) P.speed += 21 * dt * (1 - P.speed / 33);
       if (brake) P.speed -= 30 * dt;
       P.speed -= (0.012 * P.speed + (gas ? 0 : 1.2)) * dt;
       P.speed -= 9.8 * 0.75 * (bo ? 0.35 : 1) * clamp(f0.g * Math.cos(P.yaw - yawOf(f0)), -0.4, 0.4) * dt;
@@ -932,7 +956,7 @@ export function createLevel2(C) {
   function respawn() {
     const P = PL, f = frame(P.cp + 2, { ..._f });
     Object.assign(P, { s: P.cp + 2, lat: 0, x: f.x, z: f.z, y: f.y, vy: 0, speed: 6, grounded: true, falling: 0, airT: 0, yaw: yawOf(f), pitch: 0, roll: 0, steerS: 0, leanS: 0, steerAng: 0 });
-    P.boost = 0; P.lastPad = null; toast('RESPAWN · last checkpoint', 1200);
+    P.boost = 0; P.lastPad = null; if (ZV && ZV[0].grabbedBy && ZM) ZM.release(ZV[0], 'auto'); P.zg = null; toast('RESPAWN · last checkpoint', 1200);
   }
   function pushPlayer(dt) {
     const P = PL, S = C.state;
@@ -966,6 +990,7 @@ export function createLevel2(C) {
         if (R.boost > 0) tgt = Math.max(tgt, 39);
         R.spd += clamp(tgt - R.spd, -14 * dt, (R.boost > 0 ? 24 : 9) * dt);
       }
+      { const V = ZV && ZV[i]; if (V && V.grabbedBy) { R.spd = Math.max(0, R.spd - 40 * dt); R.zgT = (R.zgT || 0) + dt; if (R.zgT > 1.1 + (i % 3) * 0.3) { ZM.release(V, 'shake'); R.zgT = 0; } } }
       if (R.grounded && !R.finished && PADS.some(Q => R.s < Q.s - 3.5 && R.s + R.spd * dt >= Q.s - 3.5)) { R.boost = BOOST_T; NITRO.aiHits++; if (R.a.root.position.distanceTo(camera.position) < 60) whoosh(0.35); }
       if (!R.flame) R.flame = attachFlame(R.a.root); flameFx(R.flame, R.boost > 0, dt);
       R.s += R.spd * dt;
@@ -1067,7 +1092,7 @@ export function createLevel2(C) {
     else if (phase === 'countdown') updateCountdown(dt);
     else if (phase === 'race' || phase === 'done') {
       raceT += dt;
-      stepPlayer(dt); stepAI(dt); pushPlayer(dt); chaseCam(dt);
+      stepPlayer(dt); stepAI(dt); if (ZM) { try { ZM.update(dt, zViews(), zOnHit); } catch (e) { console.warn('[l2] zombie update', e); ZM = null; } } pushPlayer(dt); chaseCam(dt);
       if (phase === 'race' && RACERS[0].finished) { phase = 'done'; clock = 0; }
       if (phase === 'done' && (clock > 4 && (RACERS.every(R => R.finished) || clock > 25))) showResults();
     } else if (phase === 'results') { stepAI(dt); chaseCam(dt); }
@@ -1076,5 +1101,5 @@ export function createLevel2(C) {
     if (SUN && phase !== 'race' && phase !== 'done' && phase !== 'countdown') { SUN.target.position.copy(camera.position); SUN.position.copy(SUNDIR).multiplyScalar(300).add(SUN.target.position); }
   }
   return { start, update, scene, get active() { return active; }, get phase() { return phase; },
-    dbg: { get D() { return D; }, NITRO, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
+    dbg: { get D() { return D; }, NITRO, get ZM() { return ZM; }, zViews, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
 }

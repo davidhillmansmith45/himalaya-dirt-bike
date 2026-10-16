@@ -88,8 +88,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRider, makeGearMaterial } from './rider.js?v=m5';
 import { EV_S0, EV_X, EV_Z, EV_B, ALT_R0, ALT_RSTEP, ALT_R, EV_WP } from './course_everest.js?v=1';
 import { makeOutdoorEnv, makePost, contactShadow, makeGovernor } from './gfx.js?v=1';
-import { createEndgame } from './endgame.js?v=5';
+import { createEndgame } from './endgame.js?v=6';
 import { createNitroFx } from './nitro.js?v=1';
+import { createBikeSound } from './bikesnd.js?v=1';
 
 // Real-terrain backdrop: Khumbu / Imja valley (Dingboche -> Chukhung) + Everest massif, baked from
 // AWS Terrain Tiles (SRTM) DEM + Sentinel-2 cloudless tint. 1 world unit = 4 m.
@@ -3508,6 +3509,17 @@ function initRivals() {
 }
 initRivals();
 
+let BSND = null;
+const _aiSnd = [];
+function bikeSound(dt, l2) {
+  try {
+    const egOn = !!(EG && EG.active), ph = l2 && L2.phase;
+    const active = !SFX.muted && (l2 ? (ph === 'race' || ph === 'done' || ph === 'countdown') : (state.running && !egOn && !state.kidnapped && !state.finished));
+    _aiSnd.length = 0; if (active) for (const a of AI) if (a.root.visible && !a.dismounted) _aiSnd.push({ pos: a.root.position, spd: a.spd || 0 });
+    if (!BSND) BSND = createBikeSound(SFX);
+    BSND.update(dt, { active, gas: state.inGas, brake: state.inBrake, speed: state.speed || 0, vmax: l2 ? 34 : 44, grounded: state.grounded !== false, sliding: state.sliding }, _aiSnd, camera.position);
+  } catch (e) { reportOnce('bikesnd', e); }
+}
 // ---- NITRO pads on the steep hill-climb sections (by course slope), clear of jumps / whoops / crossover
 const NFX = createNitroFx(THREE, () => SFX);
 const NITRO = { pads: [], hits: 0, aiHits: 0 };
@@ -5143,7 +5155,7 @@ let L2 = null, L2loading = null;
 function startLevel2(opts) {
   if (L2loading) return L2loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l2] eg stop', e); }
-  L2loading = import('./level2.js?v=4').then(mod => {
+  L2loading = import('./level2.js?v=5').then(mod => {
     L2 = mod.createLevel2({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L2 = L2;
@@ -5163,7 +5175,7 @@ window.__startLevel2 = startLevel2;
     const tm = setInterval(() => { if (aiReady && bike && bike.userData.isGlb && RIDER) { clearInterval(tm); terrainReady.then(() => startLevel2({ skip: qp.get('l2') })); } }, 250);
   }
 }
-window.__game = { get EG() { return EG; }, get gfx() { return POST; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null, NITRO, pathTangent, HALF_W };
+window.__game = { get EG() { return EG; }, get gfx() { return POST; }, get BSND() { return BSND; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null, NITRO, pathTangent, HALF_W };
 let last = performance.now();
 const _cd = new THREE.Vector3(), _shadowC = new THREE.Vector3(), _lx = new THREE.Vector3(), _ly = new THREE.Vector3();
 { _lx.crossVectors(new THREE.Vector3(0, 1, 0), TERRAIN.sun).normalize(); _ly.crossVectors(TERRAIN.sun, _lx).normalize(); }
@@ -5201,6 +5213,7 @@ function frame(now) {
   last = now;
   if (L2 && L2.active) {
     try { L2.update(dt); } catch (e) { reportOnce('level2', e); }
+    bikeSound(dt, true);
     try { GOV(rawDt, true); } catch (e) {}
     if (POST && POST.enabled && !postFailed) { try { POST.render(L2.scene, camera); } catch (e) { postFailed = true; renderer.setRenderTarget(null); renderer.render(L2.scene, camera); } }
     else renderer.render(L2.scene, camera);
@@ -5217,6 +5230,7 @@ function frame(now) {
     try { BUF.update(dt, camera.position); } catch (e) { reportOnce('buffalo', e); }
   }
   state.hitImmune = Math.max(0, (state.hitImmune || 0) - dt);
+  bikeSound(dt, false);
   if (egOn) { /* endgame drives the camera */ }
   else if (state.running) {
     updateCamera(dt);
