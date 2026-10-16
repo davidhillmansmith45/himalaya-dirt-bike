@@ -859,8 +859,10 @@ export function createLevel2(C) {
   }
   function stepPlayer(dt) {
     const P = PL, S = C.state;
-    const gas = (keys.KeyW || keys.ArrowUp) ? 1 : 0, brake = (keys.KeyS || keys.ArrowDown) ? 1 : 0;
-    const steer = ((keys.KeyD || keys.ArrowRight) ? 1 : 0) - ((keys.KeyA || keys.ArrowLeft) ? 1 : 0);
+    const fin = RACERS[0] && RACERS[0].finished;   // past the line: inputs off, auto-brake, hold the walkway line
+    const gas = !fin && (keys.KeyW || keys.ArrowUp) ? 1 : 0, brake = !fin && (keys.KeyS || keys.ArrowDown) ? 1 : 0;
+    const steer = fin ? 0 : ((keys.KeyD || keys.ArrowRight) ? 1 : 0) - ((keys.KeyA || keys.ArrowLeft) ? 1 : 0);
+    if (fin) { P.boost = 0; P.speed = Math.max(0, P.speed - 13 * dt); const f = frame(P.s, { ..._f }); let dy = yawOf(f) - P.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI; P.yaw += dy * Math.min(1, 4 * dt); P.lat *= Math.exp(-1.5 * dt); }
     if (keys.KeyR && !P.rHeld) { P.rHeld = true; respawn(); return; } if (!keys.KeyR) P.rHeld = false;
     S.inGas = gas; S.inBrake = brake; S.inSteer = steer;
     if (P.falling > 0) { P.falling += dt; P.vy -= GRAV * dt; P.y += P.vy * dt; P.x += Math.sin(P.yaw) * P.speed * dt; P.z -= Math.cos(P.yaw) * P.speed * dt; P.speed *= Math.exp(-0.5 * dt); P.pitch += dt * 0.8;
@@ -900,6 +902,8 @@ export function createLevel2(C) {
       P.yaw += dy * Math.min(1, 6 * dt); P.speed *= Math.exp(-1.6 * dt);
       if (!P.wallT || P.wallT < raceT - 0.6) { P.wallT = raceT; C.state.shake = 0.15; }
     }
+    const sEnd = D.len - 4;   // physical end of the wall: never ride (or roll) off it
+    if (pr.s > sEnd) { const f = frame(sEnd, { ..._f }); pr.s = sEnd; P.x = f.x + f.rx * pr.lat; P.z = f.z + f.rz * pr.lat; P.speed = 0; }
     if (pr.s < 1) { pr.s = 1; const f = frame(1, { ..._f }); P.x = f.x + f.rx * pr.lat; P.z = f.z + f.rz * pr.lat; P.speed = 0; }
     if (P.grounded && PADS.some(Q => P.s < Q.s + 3.5 && pr.s >= Q.s - 3.5 && pr.s > P.s - 0.01 && Q !== P.lastPad && (P.lastPad = Q))) {
       P.boost = BOOST_T; NITRO.hits++; NITRO.lastIn = P.speed; C.state.shake = 0.3; whoosh(0.8); toast('NITRO!', 900);
@@ -951,7 +955,7 @@ export function createLevel2(C) {
       if (R.player) return;
       if (!R.base) R.base = 25.5 + (i % 3) * 0.9 - (i > 3 ? 0.8 : 0);
       R.latV = R.latV || 0;
-      if (R.finished) { R.spd = Math.max(0, R.spd - 10 * dt); }
+      if (R.finished) { R.spd = Math.max(0, R.spd - 13 * dt); R.boost = 0; if (R.s > D.len - 6 - (i % 3) * 2) { R.s = D.len - 6 - (i % 3) * 2; R.spd = 0; } }
       else {
         const gap = PL.s - R.s;   // rubber band
         let tgt = R.base + clamp(gap * 0.03, -3, 3) + Math.sin(raceT * 0.3 + i) * 0.8;
@@ -1072,5 +1076,5 @@ export function createLevel2(C) {
     if (SUN && phase !== 'race' && phase !== 'done' && phase !== 'countdown') { SUN.target.position.copy(camera.position); SUN.position.copy(SUNDIR).multiplyScalar(300).add(SUN.target.position); }
   }
   return { start, update, scene, get active() { return active; }, get phase() { return phase; },
-    dbg: { get D() { return D; }, NITRO, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, get raceT() { return raceT; } } };
+    dbg: { get D() { return D; }, NITRO, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
 }

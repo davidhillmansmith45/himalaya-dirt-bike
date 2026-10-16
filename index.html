@@ -89,6 +89,7 @@ import { makeRider, makeGearMaterial } from './rider.js?v=m5';
 import { EV_S0, EV_X, EV_Z, EV_B, ALT_R0, ALT_RSTEP, ALT_R, EV_WP } from './course_everest.js?v=1';
 import { makeOutdoorEnv, makePost, contactShadow, makeGovernor } from './gfx.js?v=1';
 import { createEndgame } from './endgame.js?v=5';
+import { createNitroFx } from './nitro.js?v=1';
 
 // Real-terrain backdrop: Khumbu / Imja valley (Dingboche -> Chukhung) + Everest massif, baked from
 // AWS Terrain Tiles (SRTM) DEM + Sentinel-2 cloudless tint. 1 world unit = 4 m.
@@ -2810,7 +2811,7 @@ function placeAtTrack(t) {
   state.pitch = 0;
   state.roll = 0;
   state.vx = 0; state.vy = 0; state.vz = 0;
-  state.speed = 0;
+  state.speed = 0; state.boost = 0; state.nCap = 0; state.nPrevS = null; state.lastPad = null;
   state.grounded = true;
   state.airTime = 0;
 }
@@ -2834,7 +2835,7 @@ function reset(fromMenu) {
   { const l2 = document.getElementById('l2Go'); if (l2) l2.hidden = true; }
   Object.assign(state, {
     running: true, finished: false, alive: true, cp: 0, bestAir: 0, sliding: false, warnedGates: false, spin: 0, stallCd: 0,
-    kidnapped: null, kidStun: 0, kidImmuneUntil: 0
+    kidnapped: null, kidStun: 0, kidImmuneUntil: 0, boost: 0, nCap: 0, lastPad: null, nPrevS: null
   });
   placeAtTrack(11 / TRACK_LEN);
   lookYaw = 0; lookPitch = 0.18;
@@ -2965,12 +2966,21 @@ function physics(dt) {
   const steerAng = state.steerS * THREE.MathUtils.lerp(0.55, 0.07, Math.pow(spdN, 0.7)) - (steer - state.steerS) * 0.06 * spdN;
   state.steerAng = (state.steerAng || 0) + (steerAng - (state.steerAng || 0)) * Math.min(1, 14 * dt);
   const forward = new THREE.Vector3(Math.sin(state.yaw), 0, -Math.cos(state.yaw));
-  const maxSpd = 44 - 24 * ginfo.offT - 10 * cw - 7 * thin; // loose moraine caps speed on the climbs
+  // nitro: crossing a pad (on the strip, grounded) gives a 2.6 s boost
+  state.boost = Math.max(0, (state.boost || 0) - dt);
+  if (state.grounded && state.nPrevS != null && Math.abs(ginfo.s - state.nPrevS) < 20) for (const P of NITRO.pads)
+    if (state.nPrevS < P.s + 3.5 && ginfo.s >= P.s - 3.5 && Math.abs(ginfo.lat) < P.lat + 0.6 && state.lastPad !== P) {
+      state.lastPad = P; state.boost = NFX.BOOST_T; NITRO.hits++; NITRO.lastIn = state.speed; state.shake = 0.3; NFX.whoosh(0.8); toast('NITRO!', 900); }
+  state.nPrevS = ginfo.s;
+  const nb = state.boost > 0;
+  state.nCap = nb ? 18 : Math.max(0, (state.nCap || 0) - 7 * dt);
+  const maxSpd = 44 - 24 * ginfo.offT - 10 * cw - 7 * thin + state.nCap; // loose moraine caps speed on the climbs
   if (gas) {
     // loose moraine on the hill climb: less drive, and wheelspin if you bog down on the wall
     const a = state.grounded ? 40 * (1 - 0.25 * cw) * (state.spin > 0 ? 0.42 : 1) * (1 - 0.3 * thin) : 7;
     state.vx += forward.x * a * dt; state.vz += forward.z * a * dt;
   }
+  if (nb) { const vf = state.vx * forward.x + state.vz * forward.z, ka = 46 * Math.max(0, 1 - vf / 60); state.vx += forward.x * ka * dt; state.vz += forward.z * ka * dt; }
   if (brake) {
     state.vx -= forward.x * 32 * dt; state.vz -= forward.z * 32 * dt;
     state.vx *= Math.exp(-2.8 * dt); state.vz *= Math.exp(-2.8 * dt);
@@ -2991,7 +3001,7 @@ function physics(dt) {
     const th = Math.hypot(ginfo.tang.x, ginfo.tang.z) || 1;
     const dirA = (forward.x * ginfo.tang.x + forward.z * ginfo.tang.z) / th;
     const gs = (baseAt(ginfo.s + 1.5) - baseAt(ginfo.s - 1.5)) / 3 * dirA, sinT = gs / Math.sqrt(1 + gs * gs);
-    const ag = -29 * (cwOld > 0.01 ? 1.6 : 1.4) * sinT * cw;
+    const ag = -29 * (cwOld > 0.01 ? 1.6 : 1.4) * sinT * cw * (nb ? 0.35 : 1);
     state.vx += forward.x * ag * dt; state.vz += forward.z * ag * dt;
     const vAl = state.vx * forward.x + state.vz * forward.z;
     if (cwOld > 0.5 && gs > 0.4 && vAl < 3 && state.spin <= 0 && state.stallCd <= 0 && state.running) {
@@ -3228,7 +3238,11 @@ function updateCamera(dt) {
   camLook.set(state.x + Math.sin(state.yaw) * 2.2, state.y + (portrait ? 1.55 : 1.25), state.z - Math.cos(state.yaw) * 2.2);
   camera.lookAt(camLook);
   const base = portrait ? BASE_FOV + 8 : BASE_FOV;
-  const targetFov = base + THREE.MathUtils.clamp(state.speed * 0.28, 0, 12);
+  const nbk = THREE.MathUtils.clamp((state.boost || 0) / 0.6, 0, 1);
+  if (nbk > 0) { camera.position.x += (Math.random() - 0.5) * 0.1 * nbk; camera.position.y += (Math.random() - 0.5) * 0.1 * nbk; }
+  NFX.speedLines(nbk * 0.85); NFX.flame(NFX.attachFlame(bike), nbk > 0);
+  NFX.glowMat.opacity = 0.25 + 0.18 * Math.sin(performance.now() * 0.008);
+  const targetFov = base + THREE.MathUtils.clamp(state.speed * 0.28, 0, 12) + nbk * 14;
   camera.fov += (targetFov - camera.fov) * Math.min(1, 4 * dt);
   camera.updateProjectionMatrix();
   sun.target.position.set(state.x, state.y, state.z);
@@ -3454,7 +3468,10 @@ function aiUpdate(dt) {
           }
         }
         const acc = target > a.spd ? 26 * (1 - 0.3 * smooth01(a.s, EV_S0 + 2000, TRACK_LEN)) : 30;
-        a.spd += THREE.MathUtils.clamp(target - a.spd, -acc * dt, acc * dt);
+        a.boost = Math.max(0, (a.boost || 0) - dt);
+        if (a.boost > 0) target = Math.max(target, a.spd, 44);
+        a.spd += THREE.MathUtils.clamp(target - a.spd, -acc * dt, (a.boost > 0 ? 40 : acc) * dt);
+        for (const P of NITRO.pads) if (a.s < P.s - 3.5 && a.s + a.spd * dt >= P.s - 3.5 && Math.abs(a.lat) < P.lat + 0.6) { a.boost = NFX.BOOST_T; NITRO.aiHits++; if (a.root.position.distanceTo(camP) < 60) NFX.whoosh(0.35); }
         a.s += a.spd * dt;
         if (a.s >= FINISH_S) { a.finished = true; a.finishT = (now - t0) / 1000; aiFinishOrder.push(a); }
       }
@@ -3464,6 +3481,7 @@ function aiUpdate(dt) {
   }
   for (const a of AI) {
     if (racing && dt > 0 && !a.kidnapped) aiPose(a, dt);
+    if (!a.nFl) a.nFl = NFX.attachFlame(a.root); NFX.flame(a.nFl, (a.boost || 0) > 0 && !a.finished && !a.kidnapped);
     const d = a.root.position.distanceTo(camP);
     a.root.visible = d < (IS_MOBILE ? 200 : 300);
     a.tag.visible = !a.dismounted && d < 90 && d > 9;
@@ -3489,6 +3507,42 @@ function initRivals() {
     }).catch(e => console.warn('[rivals] failed', e));
 }
 initRivals();
+
+// ---- NITRO pads on the steep hill-climb sections (by course slope), clear of jumps / whoops / crossover
+const NFX = createNitroFx(THREE, () => SFX);
+const NITRO = { pads: [], hits: 0, aiHits: 0 };
+try {
+  const grade = (x) => (baseAt(x + 4) - baseAt(x - 4)) / 8;
+  const bad = (x) => JUMPS.some(k => Math.max(...k.map(q => q[1])) > 1 && x > k[0][0] - 70 && x < k[k.length - 1][0] + 20) || WHOOPS.some(w => x > w[0] - 40 && x < w[0] + w[1] * w[2] + 15)
+    || Math.abs(x - CROSS_S) < 70 || GATE_S.some(g => Math.abs(x - g) < 10) || x > FINISH_S - 120 || x < 300;
+  const segs = []; let a = -1;
+  for (let x = 300; x < FINISH_S - 120; x += 3) { const up = mtnW(x) > 0.5 && grade(x) > 0.12; if (up && a < 0) a = x; if (!up && a >= 0) { if (x - a >= 40) segs.push([a, x]); a = -1; } }
+  const cand = [];
+  for (const [a0, b0] of segs) for (let x = a0 + 8; x < b0 - 15; x += 3) if (!bad(x)) { cand.push({ s: x, climb: [a0, b0], g: grade(x) }); x += 3; }
+  // greedy: steepest first with >= 450 m spacing, max 10
+  cand.sort((u, v) => v.g - u.g);
+  for (const c of cand) { if (NITRO.pads.length >= 10) break; if (NITRO.pads.every(q => Math.abs(q.s - c.s) > 450)) NITRO.pads.push(c); }
+  NITRO.pads.sort((u, v) => u.s - v.s);
+  const PW = 0.42, PLEN = 7;
+  for (const P of NITRO.pads) {
+    const pos = [], uv = [], gpos = [], NS = 4, NL = 4;
+    const pt = (ss, u, dy) => { const t = ss / TRACK_LEN, c = pathPoint(t), tg = pathTangent(t), l = Math.hypot(tg.x, tg.z) || 1, sx = -tg.z / l, sz = tg.x / l, lat = u * HALF_W; const X = c.x + sx * lat, Z = c.z + sz * lat; return [X, groundAt(X, Z, ss).y + 0.12 + dy, Z]; };
+    for (let i = 0; i < NS; i++) for (let j = 0; j < NL; j++) {
+      const s0 = P.s - PLEN / 2 + PLEN * i / NS, s1 = P.s - PLEN / 2 + PLEN * (i + 1) / NS, u0 = -PW + 2 * PW * j / NL, u1 = -PW + 2 * PW * (j + 1) / NL;
+      const A = pt(s0, u0, 0), B = pt(s0, u1, 0), Cc = pt(s1, u1, 0), Dd = pt(s1, u0, 0);
+      const ua = [j / NL, i / NS], ub = [(j + 1) / NL, i / NS], uc = [(j + 1) / NL, (i + 1) / NS], ud = [j / NL, (i + 1) / NS];
+      pos.push(...A, ...Cc, ...B, ...A, ...Dd, ...Cc); uv.push(...ua, ...uc, ...ub, ...ua, ...ud, ...uc);
+    }
+    for (const sd of [-PW, PW]) for (let i = 0; i < NS; i++) { const s0 = P.s - PLEN / 2 + PLEN * i / NS, s1 = P.s - PLEN / 2 + PLEN * (i + 1) / NS;
+      const A = pt(s0, sd, 0), B = pt(s0, sd, 1.1), Cc = pt(s1, sd, 1.1), Dd = pt(s1, sd, 0); gpos.push(...A, ...B, ...Cc, ...A, ...Cc, ...Dd); }
+    const g1 = new THREE.BufferGeometry(); g1.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g1.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    const m = new THREE.Mesh(g1, NFX.padMat); m.renderOrder = 2; m.frustumCulled = false; scene.add(m);
+    const g2 = new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.Float32BufferAttribute(gpos, 3));
+    const gm = new THREE.Mesh(g2, NFX.glowMat); gm.renderOrder = 3; scene.add(gm);
+    P.mesh = m; P.lat = PW * HALF_W;
+  }
+  console.log('[nitro] L1 pads', JSON.stringify(NITRO.pads.map(q => [Math.round(q.s), +q.g.toFixed(2)])));
+} catch (e) { reportOnce('nitro-l1', e); }
 
 // ---------------- Buffalo herds: procedural yak/bison grazing in the green valleys (one InstancedMesh, shader-animated legs/head) ----------------
 // Close-up realism: the nearest few animals also get a FUR SHELL mesh — the body is re-drawn as stacked shells pushed
@@ -5089,7 +5143,7 @@ let L2 = null, L2loading = null;
 function startLevel2(opts) {
   if (L2loading) return L2loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l2] eg stop', e); }
-  L2loading = import('./level2.js?v=3').then(mod => {
+  L2loading = import('./level2.js?v=4').then(mod => {
     L2 = mod.createLevel2({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L2 = L2;
@@ -5109,7 +5163,7 @@ window.__startLevel2 = startLevel2;
     const tm = setInterval(() => { if (aiReady && bike && bike.userData.isGlb && RIDER) { clearInterval(tm); terrainReady.then(() => startLevel2({ skip: qp.get('l2') })); } }, 250);
   }
 }
-window.__game = { get EG() { return EG; }, get gfx() { return POST; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null };
+window.__game = { get EG() { return EG; }, get gfx() { return POST; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null, NITRO, pathTangent, HALF_W };
 let last = performance.now();
 const _cd = new THREE.Vector3(), _shadowC = new THREE.Vector3(), _lx = new THREE.Vector3(), _ly = new THREE.Vector3();
 { _lx.crossVectors(new THREE.Vector3(0, 1, 0), TERRAIN.sun).normalize(); _ly.crossVectors(TERRAIN.sun, _lx).normalize(); }
