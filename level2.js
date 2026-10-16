@@ -280,6 +280,97 @@ export function createLevel2(C) {
     add(parts, m.brick, true); add(roofs, m.tile, true); add(darks, m.dark, false); add(caps, m.cap, !IS_MOBILE); add(reds, m.red, false);
   }
 
+
+  // ------------------------------------------------------------------ nitro pads on the steep climbs
+  const PADS = [];   // { s, mesh }
+  const BOOST_T = 2.6;
+  function findPads() {
+    PADS.length = 0;
+    const g = (x) => frame(x, { ..._f }).g, near = (x, arr, a, b) => arr.some(v => x > v - a && x < v + b);
+    const twr = D.towers || [];
+    let runStart = -1;
+    const segs = [];
+    for (let x = D.start + 30; x < D.finish - 40; x += 2) {
+      const up = g(x) > 0.13;
+      if (up && runStart < 0) runStart = x;
+      if (!up && runStart >= 0) { if (x - runStart >= 34) segs.push([runStart, x]); runStart = -1; }
+    }
+    const ok = (x) => !inGap(x) && !near(x, twr, 16, 16) && !D.ramps.some(r => x > r[0] - 90 && x < r[1] + 25) && !D.gaps.some(q => x > q[0] - 90 && x < q[1] + 25) && Math.abs(x - D.finish) > 60;
+    for (const [a, b] of segs) {
+      const want = [a + 6]; if (b - a > 110) want.push(a + (b - a) * 0.55);
+      for (let w of want) { let x = w; while (x < b - 8 && !ok(x)) x += 2; if (x < b - 8 && !PADS.some(P => Math.abs(P.s - x) < 45)) PADS.push({ s: x, climb: [a, b] }); }
+    }
+  }
+  function padTex() {
+    const cv = document.createElement('canvas'); cv.width = 128; cv.height = 256; const g = cv.getContext('2d');
+    g.fillStyle = 'rgba(10,40,90,0.85)'; g.fillRect(0, 0, 128, 256);
+    g.strokeStyle = '#7fe3ff'; g.lineWidth = 6; g.strokeRect(5, 5, 118, 246);
+    for (let k = 0; k < 3; k++) { const y = 200 - k * 70; g.fillStyle = k === 1 ? '#bff4ff' : '#33bbff';
+      g.beginPath(); g.moveTo(14, y); g.lineTo(64, y - 46); g.lineTo(114, y); g.lineTo(114, y + 22); g.lineTo(64, y - 24); g.lineTo(14, y + 22); g.closePath(); g.fill(); }
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
+  }
+  let padMat = null, padGlow = null;
+  function buildNitro() {
+    findPads();
+    padMat = new THREE.MeshBasicMaterial({ map: padTex(), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 });
+    padGlow = new THREE.MeshBasicMaterial({ color: 0x46c8ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    const PLEN = 7, PW = Math.min(HW - 0.3, 2.6);
+    for (const P of PADS) {
+      const gb = GB(), n = 4, gl = GB();
+      for (let k = 0; k < n; k++) {
+        const s0 = P.s - PLEN / 2 + PLEN * k / n, s1 = P.s - PLEN / 2 + PLEN * (k + 1) / n;
+        const f0 = frame(s0, { ..._f }), f1 = frame(s1, { ..._f });
+        const Q = (f, l, dy) => [f.x + f.rx * l, f.y + 0.06 + dy, f.z + f.rz * l];
+        gb.quad(Q(f0, -PW, 0), Q(f0, PW, 0), Q(f1, PW, 0), Q(f1, -PW, 0), [0, k / n], [1, k / n], [1, (k + 1) / n], [0, (k + 1) / n]);
+        for (const sd of [-1, 1]) gl.quad(Q(f0, sd * PW, 0), Q(f0, sd * PW, 1.1), Q(f1, sd * PW, 1.1), Q(f1, sd * PW, 0), [0, 0], [0, 1], [1, 1], [1, 0]);
+      }
+      const m = new THREE.Mesh(gb.geo(), padMat); m.renderOrder = 2; scene.add(m);
+      const gm = new THREE.Mesh(gl.geo(), padGlow); gm.renderOrder = 3; scene.add(gm);
+      const f = frame(P.s, { ..._f }); const lt = new THREE.PointLight(0x55ccff, IS_MOBILE ? 0 : 6, 14, 2); lt.position.set(f.x, f.y + 1.2, f.z); if (!IS_MOBILE) scene.add(lt);
+      P.mesh = m;
+    }
+    console.log('[l2] nitro pads', PADS.map(p => Math.round(p.s - D.start)));
+  }
+  // FX: blue exhaust flame, speed lines, whoosh
+  function makeFlame() {
+    const g = new THREE.Group();
+    const m1 = new THREE.MeshBasicMaterial({ color: 0x4fb8ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const m2 = new THREE.MeshBasicMaterial({ color: 0xe8fbff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const c1 = new THREE.Mesh(new THREE.ConeGeometry(0.13, 1.1, 10, 1, true), m1); c1.rotation.z = Math.PI / 2; c1.position.x = -0.55;
+    const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.55, 8, 1, true), m2); c2.rotation.z = Math.PI / 2; c2.position.x = -0.28;
+    g.add(c1, c2); g.visible = false; g.userData.c = [c1, c2]; return g;
+  }
+  function attachFlame(root) {
+    if (!root || root.userData.nitroFlame) return root && root.userData.nitroFlame;
+    let anc = root.userData.exhaustAnchor; if (!anc) root.traverse(o => { if (!anc && o.userData && o.userData.exhaustAnchor) anc = o.userData.exhaustAnchor; });
+    const fl = makeFlame(); (anc || root).add(fl); if (!anc) fl.position.set(0, 0.4, 1.0);
+    root.userData.nitroFlame = fl; return fl;
+  }
+  function flameFx(fl, on, dt) {
+    if (!fl) return; fl.visible = on; if (!on) return;
+    const k = 1.5 + Math.random() * 0.7; fl.scale.set(k, 1.5 + Math.random() * 0.4, 1.5 + Math.random() * 0.4);
+  }
+  let lines = null;
+  function speedLines(a) {
+    if (!lines) { lines = document.createElement('div'); lines.id = 'l2Nitro';
+      lines.style.cssText = 'position:fixed;inset:-20%;pointer-events:none;z-index:15;opacity:0;transition:opacity .25s;background:repeating-conic-gradient(from 0deg at 50% 50%,rgba(200,240,255,.0) 0deg 3.2deg,rgba(200,240,255,.55) 3.4deg 3.7deg,rgba(200,240,255,0) 3.9deg 7deg);-webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 32%,#000 62%);mask-image:radial-gradient(circle at 50% 50%,transparent 32%,#000 62%)';
+      document.body.appendChild(lines); }
+    lines.style.opacity = a.toFixed(2); if (a > 0) lines.style.transform = 'rotate(' + (Math.random() * 6).toFixed(1) + 'deg) scale(' + (1 + Math.random() * 0.04).toFixed(3) + ')';
+  }
+  function whoosh(vol = 0.7) {
+    const S = C.SFX; if (!S || S.muted) return; const ac = S.ctx, bus = S.bus; if (!ac || !bus) return;
+    try {
+      const t = ac.currentTime, len = 1.6, b = ac.createBuffer(1, ac.sampleRate * len, ac.sampleRate), d = b.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const src = ac.createBufferSource(); src.buffer = b;
+      const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.4; bp.frequency.setValueAtTime(300, t); bp.frequency.exponentialRampToValueAtTime(3200, t + 0.35); bp.frequency.exponentialRampToValueAtTime(700, t + len);
+      const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.08); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(240, t + 0.5); const og = ac.createGain(); og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(vol * 0.25, t + 0.1); og.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+      src.connect(bp).connect(g).connect(bus); o.connect(og).connect(bus); src.start(t); src.stop(t + len); o.start(t); o.stop(t + 1.2);
+    } catch (e) {}
+  }
+  const NITRO = { pads: PADS, hits: 0, aiHits: 0 };
+
   function buildRamps() {
     const m = mats();
     for (const r of D.ramps) {
@@ -616,7 +707,7 @@ export function createLevel2(C) {
     try {
       if (!built) {
         [D] = await Promise.all([loadData(), loadKit()]);
-        buildSky(); buildTerrain(); buildWall(); buildTowers(); buildRamps(); buildPlaza();
+        buildSky(); buildTerrain(); buildWall(); buildTowers(); buildRamps(); buildNitro(); buildPlaza();
         banner(D.start, 'START · 起点', '#a3140c'); banner(D.finish, 'FINISH · 终点', '#c08a10');
         for (const g of D.gaps) { const f = frame(g[1] + 12, { ..._f }); }
         built = true;
@@ -785,13 +876,19 @@ export function createLevel2(C) {
     const sa = P.steerS * lerp(0.55, 0.07, Math.pow(spdN, 0.7)) - (steer - P.steerS) * 0.06 * spdN;
     P.steerAng += (sa - P.steerAng) * Math.min(1, 14 * dt);
     const f0 = frame(P.s, { ..._f });
+    P.boost = Math.max(0, (P.boost || 0) - dt);
+    const bo = P.boost > 0, bk = bo ? Math.min(1, P.boost / 0.6) : 0;
+    if (bo) {   // nitro: big thrust (even off the gas), higher top speed, slope drag mostly cancelled
+      P.speed += 34 * dt * Math.max(0, 1 - P.speed / 50);
+    }
     if (P.grounded) {
       if (gas) P.speed += 21 * dt * (1 - P.speed / 33);
       if (brake) P.speed -= 30 * dt;
       P.speed -= (0.012 * P.speed + (gas ? 0 : 1.2)) * dt;
-      P.speed -= 9.8 * 0.75 * clamp(f0.g * Math.cos(P.yaw - yawOf(f0)), -0.4, 0.4) * dt;
+      P.speed -= 9.8 * 0.75 * (bo ? 0.35 : 1) * clamp(f0.g * Math.cos(P.yaw - yawOf(f0)), -0.4, 0.4) * dt;
     }
-    P.speed = clamp(P.speed, 0, 34);
+    P.vcap = bo ? 47 : Math.max(34, (P.vcap || 34) - 6 * dt);
+    P.speed = clamp(P.speed, 0, P.vcap);
     P.x += Math.sin(P.yaw) * P.speed * dt; P.z -= Math.cos(P.yaw) * P.speed * dt;
     let pr = project(P.x, P.z, P.s);
     // parapets: hold the bike on the walkway, scrub speed, align with the wall
@@ -804,6 +901,9 @@ export function createLevel2(C) {
       if (!P.wallT || P.wallT < raceT - 0.6) { P.wallT = raceT; C.state.shake = 0.15; }
     }
     if (pr.s < 1) { pr.s = 1; const f = frame(1, { ..._f }); P.x = f.x + f.rx * pr.lat; P.z = f.z + f.rz * pr.lat; P.speed = 0; }
+    if (P.grounded && PADS.some(Q => P.s < Q.s + 3.5 && pr.s >= Q.s - 3.5 && pr.s > P.s - 0.01 && Q !== P.lastPad && (P.lastPad = Q))) {
+      P.boost = BOOST_T; NITRO.hits++; NITRO.lastIn = P.speed; C.state.shake = 0.3; whoosh(0.8); toast('NITRO!', 900);
+    }
     P.s = pr.s; P.lat = pr.lat;
     const gy = surf(P.s);
     const deck = frame(P.s, { ..._f }).y;
@@ -828,7 +928,7 @@ export function createLevel2(C) {
   function respawn() {
     const P = PL, f = frame(P.cp + 2, { ..._f });
     Object.assign(P, { s: P.cp + 2, lat: 0, x: f.x, z: f.z, y: f.y, vy: 0, speed: 6, grounded: true, falling: 0, airT: 0, yaw: yawOf(f), pitch: 0, roll: 0, steerS: 0, leanS: 0, steerAng: 0 });
-    toast('RESPAWN · last checkpoint', 1200);
+    P.boost = 0; P.lastPad = null; toast('RESPAWN · last checkpoint', 1200);
   }
   function pushPlayer(dt) {
     const P = PL, S = C.state;
@@ -858,8 +958,12 @@ export function createLevel2(C) {
         const f = frame(R.s, { ..._f }); tgt -= clamp(f.g, 0, 0.3) * 6;
         // never too slow into a kicker
         for (const r of D.ramps) if (R.s > r[0] - 60 && R.s < r[1]) tgt = Math.max(tgt, 24);
-        R.spd += clamp(tgt - R.spd, -14 * dt, 9 * dt);
+        R.boost = Math.max(0, (R.boost || 0) - dt);
+        if (R.boost > 0) tgt = Math.max(tgt, 39);
+        R.spd += clamp(tgt - R.spd, -14 * dt, (R.boost > 0 ? 24 : 9) * dt);
       }
+      if (R.grounded && !R.finished && PADS.some(Q => R.s < Q.s - 3.5 && R.s + R.spd * dt >= Q.s - 3.5)) { R.boost = BOOST_T; NITRO.aiHits++; if (R.a.root.position.distanceTo(camera.position) < 60) whoosh(0.35); }
+      if (!R.flame) R.flame = attachFlame(R.a.root); flameFx(R.flame, R.boost > 0, dt);
       R.s += R.spd * dt;
       // lanes: spread out, stay off the parapets, avoid the player
       const lane = ((i % 3) - 1) * 2.4 + Math.sin(raceT * 0.4 + i * 1.7) * 0.6;
@@ -899,7 +1003,11 @@ export function createLevel2(C) {
     camera.position.copy(camP);
     const sh = C.state.shake || 0; if (sh > 0) { C.state.shake = Math.max(0, sh - dt); camera.position.x += (Math.random() - 0.5) * sh; camera.position.y += (Math.random() - 0.5) * sh; }
     camera.lookAt(camL);
-    const fov = 60 + clamp(P.speed / 34, 0, 1) * 10; camera.fov += (fov - camera.fov) * Math.min(1, 3 * dt); camera.updateProjectionMatrix();
+    const bk = clamp((P.boost || 0) / 0.6, 0, 1);
+    if (bk > 0) { camera.position.x += (Math.random() - 0.5) * 0.09 * bk; camera.position.y += (Math.random() - 0.5) * 0.09 * bk; }
+    speedLines(bk * 0.85); flameFx(attachFlame(C.getBike()), bk > 0 && P.falling <= 0, dt);
+    if (padGlow) padGlow.opacity = 0.25 + 0.18 * Math.sin(performance.now() * 0.008);
+    const fov = 60 + clamp(P.speed / 34, 0, 1) * 10 + bk * 14; camera.fov += (fov - camera.fov) * Math.min(1, 3 * dt); camera.updateProjectionMatrix();
   }
   function hud() {
     const P = PL, pos = 1 + RACERS.filter(R => !R.player && (R.finished ? (!RACERS[0].finished || R.finishT < RACERS[0].finishT) : (!RACERS[0].finished && R.s > P.s))).length;
@@ -964,5 +1072,5 @@ export function createLevel2(C) {
     if (SUN && phase !== 'race' && phase !== 'done' && phase !== 'countdown') { SUN.target.position.copy(camera.position); SUN.position.copy(SUNDIR).multiplyScalar(300).add(SUN.target.position); }
   }
   return { start, update, scene, get active() { return active; }, get phase() { return phase; },
-    dbg: { get D() { return D; }, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, get raceT() { return raceT; } } };
+    dbg: { get D() { return D; }, NITRO, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, get raceT() { return raceT; } } };
 }
