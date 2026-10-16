@@ -877,7 +877,7 @@ export function createLevel2(C) {
     const P = PL, S = C.state;
     const fin = RACERS[0] && RACERS[0].finished;   // past the line: inputs off, auto-brake, hold the walkway line
     const gas = !fin && (keys.KeyW || keys.ArrowUp) ? 1 : 0, brake = !fin && (keys.KeyS || keys.ArrowDown) ? 1 : 0;
-    const steer = fin ? 0 : ((keys.KeyD || keys.ArrowRight) ? 1 : 0) - ((keys.KeyA || keys.ArrowLeft) ? 1 : 0);
+    let steer = fin ? 0 : ((keys.KeyD || keys.ArrowRight) ? 1 : 0) - ((keys.KeyA || keys.ArrowLeft) ? 1 : 0);
     const zv = ZV && ZV[0];
     if (zv && zv.grabbedBy && !fin) {   // a zombie is hanging on: no drive, bike bogs down; alternate steer to shake it off
       const g = P.zg || (P.zg = { t: 0, n: 0, last: 0 }); g.t += dt;
@@ -885,7 +885,7 @@ export function createLevel2(C) {
       P.speed *= Math.exp(-5 * dt);
       if (g.n >= 5 || g.t > 2.6) { ZM.release(zv, g.n >= 5 ? 'shake' : 'auto'); toast(g.n >= 5 ? 'SHOOK IT OFF!' : 'BROKE FREE', 900); P.zg = null; }
     }
-    const zHeld = !!(zv && zv.grabbedBy);
+    const zHeld = !!(zv && zv.grabbedBy); if (zHeld) steer = 0;   // mashing shakes the zombie, it doesn't swerve the bike
     if (fin) { P.boost = 0; P.speed = Math.max(0, P.speed - 13 * dt); const f = frame(P.s, { ..._f }); let dy = yawOf(f) - P.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI; P.yaw += dy * Math.min(1, 4 * dt); P.lat *= Math.exp(-1.5 * dt); }
     if (keys.KeyR && !P.rHeld) { P.rHeld = true; respawn(); return; } if (!keys.KeyR) P.rHeld = false;
     S.inGas = gas; S.inBrake = brake; S.inSteer = steer;
