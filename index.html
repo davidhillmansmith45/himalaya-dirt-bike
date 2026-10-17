@@ -21,6 +21,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#1a1208;font-family:
 #toast{position:fixed;left:50%;top:14%;transform:translateX(-50%);font-size:1.35rem;font-weight:800;color:#fff;text-shadow:0 2px 14px rgba(0,0,0,.9);pointer-events:none;letter-spacing:.03em;z-index:3;min-height:1.4em}
 #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(40,28,12,.55),rgba(8,6,4,.88));backdrop-filter:blur(7px);z-index:5}
 #overlay.hidden{display:none}
+#overlay .card{max-height:96vh;overflow-y:auto}
 .card{background:linear-gradient(165deg,rgba(28,22,14,.96),rgba(12,10,8,.98));border:1px solid rgba(255,180,60,.3);border-radius:20px;padding:32px 36px;max-width:500px;text-align:center;box-shadow:0 36px 90px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,220,140,.1)}
 .badge{display:inline-block;font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;color:#ffb84a;border:1px solid rgba(255,180,60,.4);border-radius:999px;padding:4px 12px;margin-bottom:12px}
 .card h1{font-size:1.75rem;margin-bottom:10px;background:linear-gradient(90deg,#fff,#ffd080);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
@@ -40,7 +41,7 @@ button#go:active{transform:translateY(1px)}
 #mobile .respawn{right:14px;top:14px;width:50px;height:50px;font-size:1.35rem;background:rgba(20,30,50,.45);border-color:rgba(200,220,255,.4)}
 #mobile .right{left:106px;bottom:66px}
 #mobile .jump{right:106px;bottom:108px;width:62px;height:62px;font-size:.85rem;background:rgba(40,80,140,.5);border-color:rgba(140,200,255,.45)}
-#mute{position:fixed;right:14px;top:58px;z-index:6;width:44px;height:44px;border-radius:50%;border:2px solid rgba(255,200,100,.4);background:rgba(20,14,8,.5);color:#fff;font-size:1.2rem;line-height:1;cursor:pointer;backdrop-filter:blur(5px);touch-action:none;-webkit-user-select:none;user-select:none}
+#mute{position:fixed;right:14px;top:58px;z-index:8;width:44px;height:44px;border-radius:50%;border:2px solid rgba(255,200,100,.4);background:rgba(20,14,8,.5);color:#fff;font-size:1.2rem;line-height:1;cursor:pointer;backdrop-filter:blur(5px);touch-action:none;-webkit-user-select:none;user-select:none}
 @media (hover:none),(max-width:900px){#mobile{display:block} #hint{display:none} #mute{right:74px;top:17px}}
 </style>
 </head>
@@ -73,9 +74,11 @@ button#go:active{transform:translateY(1px)}
     </div>
     <button id="egGo" hidden>GET OFF · TO THE APACHES ▶</button>
     <button id="go">START RACE</button>
+    <button id="lvBack" onclick="location.href=location.pathname" style="margin-left:8px;border:1px solid rgba(255,200,110,.45);background:rgba(0,0,0,.35);color:#ffd27a;border-radius:12px;padding:13px 18px;font-weight:800;cursor:pointer">LEVELS</button>
     <div class="credit">Imja Valley, Khumbu (Nepal) from real elevation data. Terrain: SRTM via AWS Terrain Tiles. Snow/rock tint: Sentinel-2 cloudless 2024 by EOX IT Services GmbH (CC BY-NC-SA 4.0), contains modified Copernicus Sentinel data 2024. Boulder + dirt scans: Poly Haven (CC0). Rider body: MakeHuman/MPFB via Innerscene (CC0). Wolf growl: newagesoup / Freesound (CC BY 3.0); dog snarls: Lisa Redfern / SoundBible (public domain).</div>
   </div>
 </div>
+<script src="menu.js?v=1"></script>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}
 </script>
@@ -88,7 +91,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRider, makeGearMaterial } from './rider.js?v=m5';
 import { EV_S0, EV_X, EV_Z, EV_B, ALT_R0, ALT_RSTEP, ALT_R, EV_WP } from './course_everest.js?v=1';
 import { makeOutdoorEnv, makePost, contactShadow, makeGovernor } from './gfx.js?v=1';
-import { createEndgame } from './endgame.js?v=6';
+import { createEndgame } from './endgame.js?v=7';
 import { createNitroFx } from './nitro.js?v=1';
 import { createBikeSound } from './bikesnd.js?v=1';
 
@@ -2884,6 +2887,7 @@ function finish() {
   board.splice(place - 1, 0, '<b>45 YOU ' + secs + 's</b>');
   ov.querySelector('p').innerHTML = '<b>' + ord[place] + ' of ' + (AI.length + 1) + '</b> · <b>' + secs + 's</b> · ' + state.cp + '/' + checkpoints.length +
     ' gates · longest air <b>' + state.bestAir.toFixed(1) + 's</b><br><span style="font-size:.85em;opacity:.85">' + board.slice(0, 7).map((b, i) => (i + 1) + '. ' + b).join(' &nbsp; ') + '</span>';
+  try { window.HDBProgress && window.HDBProgress.mark('l1', { time: +secs, place }); } catch (e) {}
   document.getElementById('go').textContent = 'RIDE AGAIN';
   const eg = document.getElementById('egGo'); if (eg && EG) { eg.hidden = false; eg.textContent = 'GET OFF · TO THE APACHES ▶'; }
 }
@@ -5155,7 +5159,7 @@ let L2 = null, L2loading = null;
 function startLevel2(opts) {
   if (L2loading) return L2loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l2] eg stop', e); }
-  L2loading = import('./level2.js?v=7').then(mod => {
+  L2loading = import('./level2.js?v=8').then(mod => {
     L2 = mod.createLevel2({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L2 = L2;
@@ -5169,6 +5173,18 @@ function startLevel2(opts) {
     b.onclick = () => { b.hidden = true; startLevel2(); }; }
 }
 window.__startLevel2 = startLevel2;
+let terrainOK = false; terrainReady.then(() => { terrainOK = true; });
+window.__levelReady = () => !!(terrainOK && aiReady && bike && bike.userData.isGlb && RIDER);
+window.SFXunlock = () => { try { SFX.unlock(); } catch (e) {} };
+// level select → straight into the Dragon War: you're on the summit with the pack, off the bikes
+window.__launchDragonWar = () => {
+  try { reset(true); } catch (e) { console.warn('[dw] reset', e); }
+  placeAtTrack((FINISH_S + 1) / TRACK_LEN); syncBike(0);
+  state.running = false; state.finished = true;
+  for (const a of AI) { a.s = FINISH_S - 4 - Math.random() * 10; a.finished = true; a.spd = 0; }
+  document.getElementById('overlay')?.classList.add('hidden');
+  try { EG.start(); } catch (e) { console.error('[dw] start', e); }
+};
 { // dev shortcut: ?level=2 (cutscene) or ?level=2&l2=race (straight onto the wall)
   const qp = new URLSearchParams(location.search);
   if (qp.get('level') === '2') {

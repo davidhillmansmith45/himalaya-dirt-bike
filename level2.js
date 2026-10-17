@@ -1095,11 +1095,12 @@ export function createLevel2(C) {
     phase = 'results';
     const all = RACERS.slice().sort((a, b) => (a.finished && b.finished) ? a.finishT - b.finishT : (b.finished - a.finished) || (b.s - a.s));
     const me = all.indexOf(RACERS[0]) + 1;
+    if (RACERS[0].finished && !showResults.marked) { showResults.marked = true; try { window.HDBProgress && window.HDBProgress.mark('l2', { time: +RACERS[0].finishT.toFixed(1), place: me }); } catch (e) {} }
     ui.res.innerHTML = '<h1>' + (me === 1 ? 'YOU CONQUERED THE GREAT WALL!' : 'GREAT WALL · P' + me) + '</h1><p>' +
       all.map((R, i) => (i + 1) + '. ' + (R.player ? '<b>45 YOU</b>' : R.num + ' ' + R.name) + (R.finished ? ' — ' + R.finishT.toFixed(1) + 's' : ' — DNF')).join('<br>') +
-      '</p><button id="l2Again">RACE THE WALL AGAIN</button> <button id="l2Back">BACK TO THE HIMALAYAS</button>';
+      '</p><button id="l2Again">RACE THE WALL AGAIN</button> <button id="l2Back">LEVEL SELECT</button>';
     ui.res.style.display = 'flex';
-    $('l2Again').onclick = () => { ui.res.style.display = 'none'; finishOrder.length = 0; toCountdown(); };
+    $('l2Again').onclick = () => { ui.res.style.display = 'none'; finishOrder.length = 0; showResults.marked = false; toCountdown(); };
     $('l2Back').onclick = () => { location.href = location.pathname; };
   }
 
