@@ -3,21 +3,21 @@
 import { buildApacheKit } from './apache.js?v=1';
 import { makeRider, makeGearMaterial } from './rider.js?v=m5';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { createZombies } from './zombies.js?v=1';
+import { createZombies } from './zombies.js?v=3';
 
 export function createLevel2(C) {
   const { THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries } = C;
   const V3 = THREE.Vector3, clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
   const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-  const W = 8, HW = W / 2, PAR = 0.6, LATMAX = HW - 0.6, GRAV = 24;
+  const W = 15, HW = W / 2, PAR = 0.6, LATMAX = HW - 0.6, GRAV = 24;
   const scene = new THREE.Scene();
   let active = false, phase = 'off', clock = 0, built = false, D = null, TG = null, raceT = 0, results = null;
   const $ = (id) => document.getElementById(id);
 
   // ------------------------------------------------------------------ data
   async function loadData() {
-    const D = await (await fetch('./assets/l2/wall.json?v=1')).json();
-    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = './assets/l2/height.png?v=1'; });
+    const D = await (await fetch('./assets/l2/wall.json?v=2')).json();
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = './assets/l2/height.png?v=2'; });
     const cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height;
     const g = cv.getContext('2d'); g.drawImage(img, 0, 0);
     const px = g.getImageData(0, 0, img.width, img.height).data;
@@ -25,6 +25,19 @@ export function createLevel2(C) {
     for (let i = 0; i < n * n; i++) h[i] = D.terrain.hmin + (px[i * 4] * 256 + px[i * 4 + 1]) * D.terrain.scale;
     TG = { n, h, size: D.terrain.size, half: D.terrain.size / 2, cell: D.terrain.size / n };
     D.n = D.x.length;
+    // extra walkway jumps: alternate tabletops [a,b,c,d,h] and kickers (added to ramps) on flat-ish stretches
+    D.tables = []; D.kicks = [];
+    { const grd = (s) => { const i = Math.round(s / D.ds), a = Math.max(0, i - 3), b = Math.min(D.n - 1, i + 3); return (D.y[b] - D.y[a]) / ((b - a) * D.ds); };
+      const clear = (s, a, b) => !D.gaps.some(g => s > g[0] - a && s < g[1] + b) && !D.towers.some(t => Math.abs(s - t) < 20) && s > D.start + 110 && s < D.finish - 90;
+      let last = -1e9, k = 0;
+      for (let s = D.start + 110; s < D.finish - 90; s += 4) {
+        if (s - last < 95 || !clear(s, 75, 32) || !clear(s + 30, 75, 32)) continue;
+        let ok = true; for (let q = -8; q <= 30; q += 4) if (Math.abs(grd(s + q)) > 0.2) { ok = false; break; } if (!ok) continue;
+        if (k % 2 === 0) D.tables.push([s, s + 8, s + 19, s + 27, 1.7]); else D.kicks.push([s, s + 6.5, 1.25]);
+        last = s; k++; if (k >= 7) break;
+      }
+      for (const kk of D.kicks) D.ramps.push(kk);
+    }
     return D;
   }
   function TH(x, z) {
@@ -45,7 +58,12 @@ export function createLevel2(C) {
     return o;
   }
   const inGap = (s) => { for (const g of D.gaps) if (s > g[0] && s < g[1]) return true; return false; };
-  function rampH(s) { for (const r of D.ramps) if (s >= r[0] && s <= r[1]) { const u = (s - r[0]) / (r[1] - r[0]); return r[2] * u; } return 0; }
+  function rampH(s) { for (const r of D.ramps) if (s >= r[0] && s <= r[1]) { const u = (s - r[0]) / (r[1] - r[0]); return r[2] * u; }
+    for (const t of D.tables) if (s >= t[0] && s <= t[3]) return s < t[1] ? t[4] * (s - t[0]) / (t[1] - t[0]) : s <= t[2] ? t[4] : t[4] * (t[3] - s) / (t[3] - t[2]);
+    return 0; }
+  function rampSlope(s) { for (const r of D.ramps) if (s >= r[0] && s <= r[1]) return r[2] / (r[1] - r[0]);
+    for (const t of D.tables) if (s >= t[0] && s <= t[3]) return s < t[1] ? t[4] / (t[1] - t[0]) : s <= t[2] ? 0 : -t[4] / (t[3] - t[2]);
+    return 0; }
   // walkable surface (null over a broken section)
   function surf(s) { if (inGap(s)) return null; return frame(s, _sf).y + rampH(s); }
   const _sf = { ..._f };
@@ -122,7 +140,7 @@ export function createLevel2(C) {
     quad(a, b, c, d, ua, ub, uc, ud) { const k = p.length / 3; p.push(...a, ...b, ...c, ...d); u.push(...ua, ...ub, ...uc, ...ud); idx.push(k, k + 1, k + 2, k, k + 2, k + 3); },
     geo() { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(u, 2)); g.setIndex(idx); g.computeVertexNormals(); return g; }
   }; }
-  const towerAt = (s) => D.towers.some(t => Math.abs(s - t) < 6.5);
+  const towerAt = (s) => D.towers.some(t => Math.abs(s - t) < 7);
   const gateAt = (s) => s > 18 && s < 30;   // opening in the right parapet to the landing terrace
 
   function buildWall() {
@@ -227,20 +245,21 @@ export function createLevel2(C) {
         uv.setXY(k, (nx > 0.5 ? pz : px) / 1.6, (Math.abs(nrm.getY(k)) > 0.5 ? pz : py) / 1.6); }
       g.translate(x, y, z); arr.push(place(g, f, yaw));
     };
-    const arch = (sh, cx, y0, w, hSpring) => { const p = new THREE.Path(); const r = w / 2;
-      p.moveTo(cx - r, y0); p.lineTo(cx + r, y0); p.lineTo(cx + r, y0 + hSpring); p.absarc(cx, y0 + hSpring, r, 0, Math.PI, false); p.lineTo(cx - r, y0); sh.holes.push(p); };
+    const arch = (sh, cx, y0, w, hSpring, ry) => { const p = new THREE.Path(); const r = w / 2;
+      p.moveTo(cx - r, y0); p.lineTo(cx + r, y0); p.lineTo(cx + r, y0 + hSpring); p.absellipse(cx, y0 + hSpring, r, ry || r, 0, Math.PI, false, 0); p.lineTo(cx - r, y0); sh.holes.push(p); };
+    const VR = Math.min(HW, 4.1);   // vault rise over the (wide) passage
     for (const ts of D.towers) {
       const f = frame(ts, { ..._f }); const yaw = Math.atan2(f.tx, f.tz), y = f.y;
-      const L = 11.5, side = 1.9, Wt = W + 2 * side, H2 = 10.2, T = 1.1;
+      const L = 12.5, side = 1.9, Wt = W + 2 * side, H2 = 10.6, T = 1.1;
       const gy = Math.min(TH(f.x + f.rx * Wt / 2, f.z + f.rz * Wt / 2), TH(f.x - f.rx * Wt / 2, f.z - f.rz * Wt / 2), y) - 4;
       // plinth under the walkway
       box(parts, Wt, y - 0.05 - gy, L, 0, (gy + y - 0.05) / 2, 0, f, yaw);
       // end walls (across the walkway) with the arched passage
       for (const e of [-1, 1]) {
         const sh = new THREE.Shape(); sh.moveTo(-Wt / 2, 0); sh.lineTo(Wt / 2, 0); sh.lineTo(Wt / 2, H2); sh.lineTo(-Wt / 2, H2); sh.lineTo(-Wt / 2, 0);
-        arch(sh, 0, 0, W, 4.3);
-        // small arrow windows above the passage
-        for (const xx of [-3.6, 3.6]) arch(sh, xx * 1.15, 6.1, 0.8, 0.9);
+        arch(sh, 0, 0, W, 4.3, VR);
+        // small arrow windows beside / above the passage
+        for (const xx of [-1, 1]) arch(sh, xx * (HW + side * 0.5), 5.6, 0.7, 0.9);
         const g = scaleUV(new THREE.ExtrudeGeometry(sh, { depth: T, bevelEnabled: false, curveSegments: 10 }));
         g.translate(0, y, e > 0 ? L / 2 - T : -L / 2); parts.push(place(g, f, yaw));
       }
@@ -254,9 +273,9 @@ export function createLevel2(C) {
         box(darks, 0.1, 3.2, L - 2.4, sd * (HW + 0.06), y + 6.6, 0, f, yaw);
       }
       // barrel vault over the passage + floor of the upper room
-      { const v = new THREE.CylinderGeometry(HW, HW, L - 2 * T + 0.02, 18, 1, true, Math.PI / 2, Math.PI); v.rotateX(Math.PI / 2); v.scale(-1, 1, 1); scaleUV(v, 3);
+      { const v = new THREE.CylinderGeometry(HW, HW, L - 2 * T + 0.02, 18, 1, true, Math.PI / 2, Math.PI); v.rotateX(Math.PI / 2); v.scale(-1, VR / HW, 1); scaleUV(v, 3);
         v.translate(0, y + 4.3, 0); parts.push(place(v, f, yaw)); }
-      box(parts, W, H2 - 8.3, L - 2 * T, 0, y + 8.3 + (H2 - 8.3) / 2, 0, f, yaw);
+      box(parts, W, H2 - 4.3 - VR - 0.05, L - 2 * T, 0, y + 4.3 + VR + 0.05 + (H2 - 4.3 - VR - 0.05) / 2, 0, f, yaw);
       // cornice, parapet with merlons and loopholes
       box(caps, Wt + 0.5, 0.32, L + 0.5, 0, y + H2 + 0.16, 0, f, yaw);
       const nm = 6;
@@ -296,7 +315,7 @@ export function createLevel2(C) {
       if (up && runStart < 0) runStart = x;
       if (!up && runStart >= 0) { if (x - runStart >= 34) segs.push([runStart, x]); runStart = -1; }
     }
-    const ok = (x) => !inGap(x) && !near(x, twr, 16, 16) && !D.ramps.some(r => x > r[0] - 90 && x < r[1] + 25) && !D.gaps.some(q => x > q[0] - 90 && x < q[1] + 25) && Math.abs(x - D.finish) > 60;
+    const ok = (x) => !inGap(x) && !near(x, twr, 16, 16) && !D.ramps.some(r => x > r[0] - 90 && x < r[1] + 25) && !D.tables.some(t => x > t[0] - 60 && x < t[3] + 20) && !D.gaps.some(q => x > q[0] - 90 && x < q[1] + 25) && Math.abs(x - D.finish) > 60;
     for (const [a, b] of segs) {
       const want = [a + 6]; if (b - a > 110) want.push(a + (b - a) * 0.55);
       for (let w of want) { let x = w; while (x < b - 8 && !ok(x)) x += 2; if (x < b - 8 && !PADS.some(P => Math.abs(P.s - x) < 45)) PADS.push({ s: x, climb: [a, b] }); }
@@ -315,7 +334,7 @@ export function createLevel2(C) {
     findPads();
     padMat = new THREE.MeshBasicMaterial({ map: padTex(), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 });
     padGlow = new THREE.MeshBasicMaterial({ color: 0x46c8ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
-    const PLEN = 7, PW = Math.min(HW - 0.3, 2.6);
+    const PLEN = 7, PW = Math.min(HW - 0.3, HW * 0.42);
     for (const P of PADS) {
       const gb = GB(), n = 4, gl = GB();
       for (let k = 0; k < n; k++) {
@@ -381,7 +400,7 @@ export function createLevel2(C) {
   }
   function zOnHit(V, kind) {
     if (kind === 'knock') { if (V.player) { C.state.shake = 0.3; PL.speed *= 0.93; toast(PL.boost > 0 ? 'NITRO SMASH!' : 'ZOMBIE SMASHED!', 900); } else V.R.spd *= 0.93; }
-    else if (kind === 'grab') { if (V.player) { PL.zg = { t: 0, n: 0, last: 0 }; C.state.shake = 0.35; toast(IS_TOUCH ? 'ZOMBIE GRAB! Tap ← → fast to shake it off' : 'ZOMBIE GRAB! Mash A/D (← →) to shake it off', 1800); } else V.R.zgT = 0; }
+    else if (kind === 'grab') { if (V.player) { PL.zg = { t: 0, n: 0, last: 0 }; C.state.shake = 0.35; toast(IS_TOUCH ? 'ZOMBIE GRAB! Tap ← → 8× to shake it off' : 'ZOMBIE GRAB! Mash A/D (← →) 8× to shake it off', 1800); } else V.R.zgT = 0; }
   }
   const IS_TOUCH = matchMedia('(hover:none)').matches;
 
@@ -395,13 +414,13 @@ export function createLevel2(C) {
         const f0 = frame(s0, { ..._f }), f1 = frame(s1, { ..._f });
         const h0 = f0.y + rampH(s0) + 0.03, h1 = f1.y + rampH(s1) + 0.03;
         const P = (f, l, y) => [f.x + f.rx * l, y, f.z + f.rz * l];
-        gb.quad(P(f0, -HW + 0.05, h0), P(f0, HW - 0.05, h0), P(f1, HW - 0.05, h1), P(f1, -HW + 0.05, h1), [0, s0 / 2], [2, s0 / 2], [2, s1 / 2], [0, s1 / 2]);
+        gb.quad(P(f0, -HW + 0.05, h0), P(f0, HW - 0.05, h0), P(f1, HW - 0.05, h1), P(f1, -HW + 0.05, h1), [0, s0 / 2], [W / 2, s0 / 2], [W / 2, s1 / 2], [0, s1 / 2]);
         for (const sd of [-1, 1]) { const l = sd * (HW - 0.05);
           const A = P(f0, l, f0.y), B = P(f0, l, h0), Cc = P(f1, l, h1), Dd = P(f1, l, f1.y);
           if (sd > 0) gb.quad(A, B, Cc, Dd, [0, 0], [0, 0.3], [1, 0.3], [1, 0]); else gb.quad(B, A, Dd, Cc, [0, 0.3], [0, 0], [1, 0], [1, 0.3]); }
       }
       const fe = frame(r[1], { ..._f }), P = (l, y) => [fe.x + fe.rx * l, y, fe.z + fe.rz * l];
-      gb.quad(P(HW - 0.05, fe.y), P(-HW + 0.05, fe.y), P(-HW + 0.05, fe.y + r[2] + 0.03), P(HW - 0.05, fe.y + r[2] + 0.03), [0, 0], [2, 0], [2, 0.5], [0, 0.5]);
+      gb.quad(P(HW - 0.05, fe.y), P(-HW + 0.05, fe.y), P(-HW + 0.05, fe.y + r[2] + 0.03), P(HW - 0.05, fe.y + r[2] + 0.03), [0, 0], [W / 2, 0], [W / 2, 0.5], [0, 0.5]);
       const o = new THREE.Mesh(gb.geo(), m.wood); o.castShadow = !IS_MOBILE; o.receiveShadow = true; scene.add(o);
       // warning chevrons on the parapets
       for (const sd of [-1, 1]) { const f = frame(r[0] - 6, { ..._f }); const sg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.7, 1.4), new THREE.MeshBasicMaterial({ color: 0xffb020 }));
@@ -409,6 +428,23 @@ export function createLevel2(C) {
     }
   }
 
+  function buildTables() {   // stone tabletops across the walkway
+    const m = mats();
+    for (const t of D.tables) {
+      const top = GB(), side = GB(), n = Math.ceil((t[3] - t[0]) / 1.0);
+      const P = (f, l, y) => [f.x + f.rx * l, y, f.z + f.rz * l];
+      for (let k = 0; k < n; k++) {
+        const s0 = t[0] + (t[3] - t[0]) * k / n, s1 = t[0] + (t[3] - t[0]) * (k + 1) / n, f0 = frame(s0, { ..._f }), f1 = frame(s1, { ..._f });
+        const h0 = f0.y + rampH(s0) + 0.03, h1 = f1.y + rampH(s1) + 0.03, L = HW - 0.05;
+        top.quad(P(f0, -L, h0), P(f0, L, h0), P(f1, L, h1), P(f1, -L, h1), [-L / 2, s0 / 2], [L / 2, s0 / 2], [L / 2, s1 / 2], [-L / 2, s1 / 2]);
+        for (const sd of [-1, 1]) { const l = sd * L, A = P(f0, l, f0.y), B = P(f0, l, h0), Cc = P(f1, l, h1), Dd = P(f1, l, f1.y);
+          if (sd > 0) side.quad(A, B, Cc, Dd, [s0 / 1.6, f0.y / 1.6], [s0 / 1.6, h0 / 1.6], [s1 / 1.6, h1 / 1.6], [s1 / 1.6, f1.y / 1.6]); else side.quad(B, A, Dd, Cc, [s0 / 1.6, h0 / 1.6], [s0 / 1.6, f0.y / 1.6], [s1 / 1.6, f1.y / 1.6], [s1 / 1.6, h1 / 1.6]); }
+      }
+      const a = new THREE.Mesh(top.geo(), m.floor), b = new THREE.Mesh(side.geo(), m.brick); a.receiveShadow = b.receiveShadow = true; a.castShadow = b.castShadow = !IS_MOBILE; scene.add(a, b);
+      for (const sd of [-1, 1]) { const f = frame(t[0] - 6, { ..._f }); const sg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.7, 1.4), new THREE.MeshBasicMaterial({ color: 0xffb020 }));
+        sg.position.set(f.x + f.rx * sd * (HW - 0.05), f.y + 1.45, f.z + f.rz * sd * (HW - 0.05)); sg.rotation.y = Math.atan2(f.tx, f.tz); scene.add(sg); }
+    }
+  }
   function banner(s, text, col) {
     const f = frame(s, { ..._f }), yaw = Math.atan2(f.tx, f.tz);
     const g = new THREE.Group(); g.position.set(f.x, f.y, f.z); g.rotation.y = yaw;
@@ -699,7 +735,7 @@ export function createLevel2(C) {
     return { root: A.root, rotor: A.rotor, trotor: A.trotor, pos: new V3(), yaw: 0, rpm: 1 };
   }
 
-  const GRID = [[0, 0], [-2.6, 0], [2.6, 0], [-2.6, -7], [0, -7], [2.6, -7], [0, -14]];   // [lat, ds] from the start line
+  const GRID = [[0, 0], [-4.4, 0], [4.4, 0], [-2.2, -7], [2.2, -7], [-4.4, -14], [4.4, -14]];   // [lat, ds] from the start line
   function placeBikes() {
     RACERS.forEach((R, i) => {
       const [lat, ds] = GRID[i];
@@ -721,7 +757,7 @@ export function createLevel2(C) {
     try {
       if (!built) {
         [D] = await Promise.all([loadData(), loadKit()]);
-        buildSky(); buildTerrain(); buildWall(); buildTowers(); buildRamps(); buildNitro(); buildPlaza();
+        buildSky(); buildTerrain(); buildWall(); buildTowers(); buildRamps(); buildTables(); buildNitro(); buildPlaza();
         try { ZM = createZombies({ THREE, scene, frame, HW, PAR, D, inGap, towerAt, pads: PADS, IS_MOBILE, SFX: C.SFX, camera }); } catch (e) { console.warn('[l2] zombies', e); ZM = null; }
         banner(D.start, 'START · 起点', '#a3140c'); banner(D.finish, 'FINISH · 终点', '#c08a10');
         for (const g of D.gaps) { const f = frame(g[1] + 12, { ..._f }); }
@@ -883,7 +919,7 @@ export function createLevel2(C) {
       const g = P.zg || (P.zg = { t: 0, n: 0, last: 0 }); g.t += dt;
       if (steer && steer !== g.last) { g.n++; g.last = steer; C.state.shake = 0.15; }
       P.speed *= Math.exp(-5 * dt);
-      if (g.n >= 5 || g.t > 2.6) { ZM.release(zv, g.n >= 5 ? 'shake' : 'auto'); toast(g.n >= 5 ? 'SHOOK IT OFF!' : 'BROKE FREE', 900); P.zg = null; }
+      if (g.n >= 8 || g.t > 4.0) { ZM.release(zv, g.n >= 8 ? 'shake' : 'auto'); toast(g.n >= 8 ? 'SHOOK IT OFF!' : 'BROKE FREE', 900); P.zg = null; }
     }
     const zHeld = !!(zv && zv.grabbedBy); if (zHeld) steer = 0;   // mashing shakes the zombie, it doesn't swerve the bike
     if (fin) { P.boost = 0; P.speed = Math.max(0, P.speed - 13 * dt); const f = frame(P.s, { ..._f }); let dy = yawOf(f) - P.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI; P.yaw += dy * Math.min(1, 4 * dt); P.lat *= Math.exp(-1.5 * dt); }
@@ -946,7 +982,7 @@ export function createLevel2(C) {
     }
     // checkpoints & finish
     for (const c of D.cps) if (P.s > c + 1 && c > P.cp && P.grounded) { P.cp = c; if (c !== D.start) toast('CHECKPOINT', 900); }
-    const pitchT = P.grounded ? Math.atan(f0.g * Math.cos(P.yaw - yawOf(f0)) + (rampH(P.s) ? 0.23 : 0)) : Math.atan2(P.vy, Math.max(6, P.speed)) * 0.7;
+    const pitchT = P.grounded ? Math.atan(f0.g * Math.cos(P.yaw - yawOf(f0)) + rampSlope(P.s)) : Math.atan2(P.vy, Math.max(6, P.speed)) * 0.7;
     P.pitch += (clamp(pitchT, -0.6, 0.6) - P.pitch) * Math.min(1, (P.grounded ? 14 : 3.2) * dt);
     const rollT = clamp(-P.steerS * (0.12 + 0.2 * Math.min(1, P.speed / 22)), -0.34, 0.34);
     P.roll += (rollT - P.roll) * Math.min(1, 6.5 * dt);
@@ -986,19 +1022,27 @@ export function createLevel2(C) {
         const f = frame(R.s, { ..._f }); tgt -= clamp(f.g, 0, 0.3) * 6;
         // never too slow into a kicker
         for (const r of D.ramps) if (R.s > r[0] - 60 && R.s < r[1]) tgt = Math.max(tgt, 24);
+        for (const t of D.tables) if (R.s > t[0] - 50 && R.s < t[1]) tgt = Math.max(tgt, 23);
         R.boost = Math.max(0, (R.boost || 0) - dt);
         if (R.boost > 0) tgt = Math.max(tgt, 39);
         R.spd += clamp(tgt - R.spd, -14 * dt, (R.boost > 0 ? 24 : 9) * dt);
       }
-      { const V = ZV && ZV[i]; if (V && V.grabbedBy) { R.spd = Math.max(0, R.spd - 40 * dt); R.zgT = (R.zgT || 0) + dt; if (R.zgT > 1.1 + (i % 3) * 0.3) { ZM.release(V, 'shake'); R.zgT = 0; } } }
+      { const V = ZV && ZV[i]; if (V && V.grabbedBy) { R.spd = Math.max(0, R.spd - 40 * dt); R.zgT = (R.zgT || 0) + dt; if (R.zgT > 1.8 + (i % 3) * 0.4) { ZM.release(V, 'shake'); R.zgT = 0; } } }
       if (R.grounded && !R.finished && PADS.some(Q => R.s < Q.s - 3.5 && R.s + R.spd * dt >= Q.s - 3.5)) { R.boost = BOOST_T; NITRO.aiHits++; if (R.a.root.position.distanceTo(camera.position) < 60) whoosh(0.35); }
       if (!R.flame) R.flame = attachFlame(R.a.root); flameFx(R.flame, R.boost > 0, dt);
       R.s += R.spd * dt;
       // lanes: spread out, stay off the parapets, avoid the player
-      const lane = ((i % 3) - 1) * 2.4 + Math.sin(raceT * 0.4 + i * 1.7) * 0.6;
+      const LW = LATMAX - 1.0, nL = 6;
+      if (R.lane == null) R.lane = (i - 1) % nL;
+      // blocked by someone just ahead in my lane? pick the nearest free lane and pass
+      R.laneCd = Math.max(0, (R.laneCd || 0) - dt);
+      const laneLat = (k) => -LW + (2 * LW) * k / (nL - 1);
+      const blocked = (lat) => RACERS.some(O => O !== R && (O.player ? PL.s : O.s) - R.s > 0 && (O.player ? PL.s : O.s) - R.s < 10 && Math.abs((O.player ? PL.lat : O.lat) - lat) < 1.8);
+      if (R.laneCd <= 0 && blocked(laneLat(R.lane))) { for (const d of [1, -1, 2, -2, 3, -3]) { const k = R.lane + d; if (k >= 0 && k < nL && !blocked(laneLat(k))) { R.lane = k; R.laneCd = 1.2; break; } } }
+      const lane = laneLat(R.lane) + Math.sin(raceT * 0.4 + i * 1.7) * 0.5;
       let lt = lane; if (Math.abs(R.s - PL.s) < 4 && Math.abs(R.lat - PL.lat) < 1.6) lt = R.lat + Math.sign(R.lat - PL.lat || 1) * 2;
       lt = clamp(lt, -LATMAX + 0.4, LATMAX - 0.4);
-      const nl = R.lat + (lt - R.lat) * Math.min(1, 1.2 * dt); R.latV = (nl - R.lat) / Math.max(dt, 1e-3); R.lat = nl;
+      const nl = R.lat + clamp((lt - R.lat) * Math.min(1, 1.6 * dt), -4 * dt, 4 * dt); R.latV = (nl - R.lat) / Math.max(dt, 1e-3); R.lat = nl;
       const gy = surf(R.s), deck = frame(R.s, { ..._f }).y;
       if (R.grounded) {
         if (gy === null || gy < R.y + R.vy * dt - 0.5 * GRAV * dt * dt - 0.05) { R.grounded = false; R.airT = 0; }
@@ -1010,7 +1054,7 @@ export function createLevel2(C) {
         else if (gy === null && R.y < deck - 2.5) { R.fall = (R.fall || 0) + 1; const g = D.gaps.find(g => R.s > g[0] - 5 && R.s < g[1] + 5); R.s = g ? g[1] + 3 : R.s; R.y = frame(R.s).y; R.vy = 0; R.grounded = true; R.spd = 10; }
       }
       const f = frame(R.s, { ..._f });
-      const pt = R.grounded ? Math.atan(f.g + (rampH(R.s) ? 0.23 : 0)) : Math.atan2(R.vy, Math.max(6, R.spd)) * 0.7;
+      const pt = R.grounded ? Math.atan(f.g + rampSlope(R.s)) : Math.atan2(R.vy, Math.max(6, R.spd)) * 0.7;
       R.pitch += (clamp(pt, -0.6, 0.6) - R.pitch) * Math.min(1, (R.grounded ? 14 : 3.2) * dt);
       R.roll += (clamp(-R.latV * 0.08, -0.25, 0.25) - (R.roll || 0)) * Math.min(1, 6 * dt);
       if (!R.finished && R.s >= D.finish) { R.finished = true; R.finishT = raceT; finishOrder.push(R); }

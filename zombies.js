@@ -64,12 +64,13 @@ export function createZombies(C) {
   const SP = [];
   {
     const bad = (s) => D.gaps.some(g => s > g[0] - 95 && s < g[1] + 25) || D.ramps.some(r => s > r[0] - 95 && s < r[1] + 25) || towerAt(s) || D.towers.some(t => Math.abs(s - t) < 12)
-      || (pads || []).some(p => Math.abs(p.s - s) < 16) || s < D.start + 70 || s > D.finish - 35;
-    for (let s = D.start + 80; s < D.finish - 35; s += rnd(55, 85)) if (!bad(s)) SP.push({ s, sd: Math.random() < 0.5 ? -1 : 1, used: false });
+      || (pads || []).some(p => Math.abs(p.s - s) < 16) || (D.tables || []).some(t => s > t[0] - 60 && s < t[3] + 15) || s < D.start + 70 || s > D.finish - 35;
+    let h = 0;
+    for (let s = D.start + 75; s < D.finish - 35; s += rnd(38, 60)) if (!bad(s)) { const horde = (h++ % 4) === 2; SP.push({ s, sd: Math.random() < 0.5 ? -1 : 1, used: false, n: horde ? (IS_MOBILE ? 4 : 5) : (Math.random() < 0.3 ? 2 : 1), horde }); }
   }
-  const NMAX = IS_MOBILE ? 7 : 12;
+  const NMAX = IS_MOBILE ? 12 : 20;
   const Z = []; for (let i = 0; i < NMAX; i++) Z.push(makeZombie(i));
-  const STATS = { spawned: 0, grabs: 0, aiGrabs: 0, knocks: 0, shaken: 0, groans: 0 };
+  const STATS = { leaps: 0, hordes: 0, spawned: 0, grabs: 0, aiGrabs: 0, knocks: 0, shaken: 0, groans: 0 };
   // ---------------------------------------------------------------- audio: low formant groan, positional by distance
   function groan(pos, vol = 0.5) {
     const ac = SFX && SFX.ctx, bus = SFX && SFX.bus; if (!ac || !bus || SFX.muted) return;
@@ -126,17 +127,22 @@ export function createZombies(C) {
     z.spin = new V3(rnd(-6, 6), rnd(-4, 4), rnd(-6, 6)); groan(z.root.position, 0.6);
   }
   function activate(sp) {
-    const z = Z.find(q => q.st === 'off'); if (!z) return false;
-    sp.used = true; STATS.spawned++;
-    Object.assign(z, { st: 'climb', t: 0, s: sp.s, sd: sp.sd, sp, lat: sp.sd * (HW + PAR + 0.32), life: 0, grab: null, warned: false, reach: 0, lunge: 0 });
-    const f = frame(z.s, _f); z.deck = f.y; z.y0 = f.y - rnd(3.2, 4.2); z.y = z.y0; z.root.visible = true; z.root.rotation.set(0, 0, 0);
+    sp.used = true; if (sp.horde) STATS.hordes++;
+    for (let k = 0; k < (sp.n || 1); k++) {
+      const z = Z.find(q => q.st === 'off'); if (!z) break;
+      STATS.spawned++;
+      const sd = k === 0 ? sp.sd : (k % 2 ? -sp.sd : sp.sd), ss = sp.s + (k === 0 ? 0 : rnd(-6, 6));
+      Object.assign(z, { st: 'climb', t: 0, s: ss, sd, sp, lat: sd * (HW + PAR + 0.32), life: 0, grab: null, warned: false, reach: 0, lunge: 0, lungeSnd: false,
+        leaper: Math.random() < (sp.horde ? 0.45 : 0.35), climbK: rnd(1.15, 1.6) });
+      const f = frame(z.s, _f); z.deck = f.y; z.y0 = f.y - rnd(2.6, 4.0) - k * 0.5; z.y = z.y0; z.root.visible = true; z.root.rotation.set(0, 0, 0);
+    }
     return true;
   }
   function reset() { for (const z of Z) { z.st = 'off'; z.root.visible = false; z.grab = null; } for (const p of SP) p.used = false; }
   // ---------------------------------------------------------------- update
   function update(dt, racers, onGrab) {
     // trigger spawns ~70-120 m ahead of any racer
-    for (const sp of SP) { if (sp.used) continue; for (const R of racers) { const d = sp.s - R.s; if (d > 60 && d < 115 && !R.finished) { activate(sp); break; } } }
+    for (const sp of SP) { if (sp.used) continue; for (const R of racers) { const d = sp.s - R.s; if (d > 55 && d < 120 && !R.finished) { activate(sp); break; } } }
     for (const z of Z) {
       if (z.st === 'off') continue;
       z.t += dt; z.life += dt;
@@ -145,15 +151,35 @@ export function createZombies(C) {
       const anim = z.root.visible;
       const f = frame(z.s, _f), inX = -z.sd * f.rx, inZ = -z.sd * f.rz;   // facing into the walkway
       if (z.st === 'climb') {
-        const top = z.deck + 0.05, k = 0.75;
+        const top = z.deck + 0.05, k = z.climbK || 1.3;
         z.y = Math.min(top - 0.95, z.y + k * dt);
         z.root.position.set(f.x + f.rx * z.lat, z.y, f.z + f.rz * z.lat); z.root.rotation.set(0, Math.atan2(inX, inZ), 0);
         if (anim) poseClimb(z, z.t, k);
-        if (z.y >= top - 0.95) { z.st = 'perch'; z.t = 0; z.perchT = rnd(0.7, 1.3); groan(z.root.position, 0.55); }
+        if (z.y >= top - 0.95) { z.st = 'perch'; z.t = 0; z.perchT = rnd(0.35, 0.8); groan(z.root.position, 0.55); }
       } else if (z.st === 'perch') {
         z.root.position.set(f.x + f.rx * z.lat, z.deck - 0.55 + Math.sin(z.t * 2) * 0.03, f.z + f.rz * z.lat); z.root.rotation.set(0, Math.atan2(inX, inZ), 0);
         if (anim) posePerch(z, z.t);
-        if (z.t > z.perchT) { z.st = 'over'; z.t = 0; }
+        if (z.leaper) {   // wait on the parapet and leap at a rider coming past
+          let tgt = null; for (const R of racers) { const ds = z.s - R.s; if (ds > 4 && ds < 26 && !R.finished && !R.grabbedBy) { tgt = R; break; } }
+          if (tgt) { const tt = 0.75, sAt = tgt.s + tgt.speed * tt; z.st = 'leap'; z.t = 0; z.T = tt; z.lat0 = z.lat; z.s0 = z.s;
+            z.s1 = clamp(sAt, z.s - 8, z.s + 4); z.lat1 = clamp(tgt.lat, -HW + 0.6, HW - 0.6); STATS.leaps++; groan(z.root.position, 0.8); }
+          else if (z.t > 9) { z.st = 'over'; z.t = 0; }
+        } else if (z.t > z.perchT) { z.st = 'over'; z.t = 0; }
+      } else if (z.st === 'leap') {
+        const u = Math.min(1, z.t / z.T); z.s = z.s0 + (z.s1 - z.s0) * u; z.lat = z.lat0 + (z.lat1 - z.lat0) * u;
+        const ff = frame(z.s, _f); z.deck = ff.y;
+        z.root.position.set(ff.x + ff.rx * z.lat, ff.y + 0.4 * (1 - u) + Math.sin(u * Math.PI) * 1.15, ff.z + ff.rz * z.lat);
+        z.root.rotation.set(-0.5 * Math.sin(u * Math.PI), Math.atan2(-z.sd * ff.rx, -z.sd * ff.rz), 0);
+        if (anim) { poseLurk(z, z.t * 2, 1); for (const L of z.legs) L.t.rotation.x = -1.1 * Math.sin(u * Math.PI); }
+        for (const R of racers) {   // tackle mid-air
+          if (R.grabbedBy || R.finished || !R.grounded) continue;
+          if (Math.abs(R.s - z.s) < 1.8 && Math.abs(R.lat - z.lat) < 1.8) {
+            if (R.speed > 30 || R.boost > 0) { knockOff(z, R, R.boost > 0); onGrab && onGrab(R, 'knock', z); }
+            else { z.st = 'grab'; z.t = 0; z.grab = R; R.grabbedBy = z; if (R.player) STATS.grabs++; else STATS.aiGrabs++; groan(z.root.position, 0.9); onGrab && onGrab(R, 'grab', z); }
+            break;
+          }
+        }
+        if (z.st === 'leap' && u >= 1) { z.st = 'lunge'; z.t = 0; z.reach = 1; }
       } else if (z.st === 'over') {   // haul over the parapet onto the walkway edge
         const u = Math.min(1, z.t / 0.9), e = u * u * (3 - 2 * u);
         const lat0 = z.sd * (HW + PAR + 0.32), lat1 = z.sd * (HW - 0.5);
@@ -164,22 +190,22 @@ export function createZombies(C) {
         if (u >= 1) { z.st = 'lurk'; z.t = 0; }
       } else if (z.st === 'lurk' || z.st === 'lunge') {
         // face the nearest oncoming racer
-        let best = null, bd = 1e9; for (const R of racers) { const ds = z.s - R.s; if (ds > -3 && ds < 30 && Math.abs(ds) < bd && !R.grabbedBy) { bd = Math.abs(ds); best = R; } }
+        let best = null, bd = 1e9; for (const R of racers) { const ds = z.s - R.s; if (ds > -3 && ds < 35 && Math.abs(ds) < bd && !R.grabbedBy) { bd = Math.abs(ds); best = R; } }
         const latEdge = z.sd * (HW - 0.5);
-        if (best && z.s - best.s < 9 && z.s - best.s > -1.5) {   // lunge: step in toward the racer's line
+        if (best && z.s - best.s < 18 && z.s - best.s > -1.5) {   // sprinting lunge into the racer's line
           z.st = 'lunge'; z.reach = Math.min(1, z.reach + dt * 4);
-          const tl = clamp(best.lat, -HW + 0.5, HW - 0.5), want = latEdge + clamp(tl - latEdge, -1.8, 1.8);
-          z.lat += (want - z.lat) * Math.min(1, 6 * dt); if (!z.lungeSnd) { z.lungeSnd = true; groan(z.root.position, 0.7); }
-        } else { z.st = 'lurk'; z.reach = Math.max(0, z.reach - dt * 2); z.lat += (latEdge - z.lat) * Math.min(1, 2 * dt); }
+          const tl = clamp(best.lat, -HW + 0.5, HW - 0.5), want = latEdge + clamp(tl - latEdge, -5.5, 5.5);
+          z.lat += clamp(want - z.lat, -6.5 * dt, 6.5 * dt); z.s -= Math.min(3.5 * dt, Math.max(0, z.s - best.s - 1)); if (!z.lungeSnd) { z.lungeSnd = true; groan(z.root.position, 0.7); }
+        } else { z.st = 'lurk'; z.reach = Math.max(0, z.reach - dt * 2); z.lat += (latEdge - z.lat) * Math.min(1, 0.6 * dt); }
         const fx = best ? (frame(best.s, { ..._f }).x + f.rx * best.lat) - z.root.position.x : inX, fz = best ? (frame(best.s, { ..._f }).z + f.rz * best.lat) - z.root.position.z : inZ;
-        z.root.position.set(f.x + f.rx * z.lat, z.deck, f.z + f.rz * z.lat);
+        { const ff = frame(z.s, _f); z.deck = ff.y; z.root.position.set(ff.x + ff.rx * z.lat, z.deck, ff.z + ff.rz * z.lat); }
         const ty = Math.atan2(fx, fz); let dy = ty - z.root.rotation.y; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI; z.root.rotation.y += dy * Math.min(1, 5 * dt);
         if (anim) poseLurk(z, z.t, z.reach);
         // contact
         for (const R of racers) {
           if (R.grabbedBy || R.finished || !R.grounded) continue;
-          if (Math.abs(R.s - z.s) < 1.3 && Math.abs(R.lat - z.lat) < 1.25 + z.reach * 0.35) {
-            if (R.speed > 28 || R.boost > 0) { knockOff(z, R, R.boost > 0); onGrab && onGrab(R, 'knock', z); }
+          if (Math.abs(R.s - z.s) < 1.6 && Math.abs(R.lat - z.lat) < 1.5 + z.reach * 0.6) {
+            if (R.speed > 30 || R.boost > 0) { knockOff(z, R, R.boost > 0); onGrab && onGrab(R, 'knock', z); }
             else { z.st = 'grab'; z.t = 0; z.grab = R; R.grabbedBy = z; if (R.player) STATS.grabs++; else STATS.aiGrabs++; groan(z.root.position, 0.8); onGrab && onGrab(R, 'grab', z); }
             break;
           }
