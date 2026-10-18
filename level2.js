@@ -9,7 +9,7 @@ export function createLevel2(C) {
   const { THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries } = C;
   const V3 = THREE.Vector3, clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
   const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-  const W = 15, HW = W / 2, PAR = 0.6, LATMAX = HW - 0.6, GRAV = 24;
+  const W = 15, HW = W / 2, PAR = 0.6, LATMAX = HW - 0.6, GRAV = 24, TOWER_L = 12.5;
   const scene = new THREE.Scene();
   let active = false, phase = 'off', clock = 0, built = false, D = null, TG = null, raceT = 0, results = null;
   const $ = (id) => document.getElementById(id);
@@ -25,6 +25,7 @@ export function createLevel2(C) {
     for (let i = 0; i < n * n; i++) h[i] = D.terrain.hmin + (px[i * 4] * 256 + px[i * 4 + 1]) * D.terrain.scale;
     TG = { n, h, size: D.terrain.size, half: D.terrain.size / 2, cell: D.terrain.size / n };
     D.n = D.x.length;
+    levelTowers(D);
     // extra walkway jumps: alternate tabletops [a,b,c,d,h] and kickers (added to ramps) on flat-ish stretches
     D.tables = []; D.kicks = [];
     { const grd = (s) => { const i = Math.round(s / D.ds), a = Math.max(0, i - 3), b = Math.min(D.n - 1, i + 3); return (D.y[b] - D.y[a]) / ((b - a) * D.ds); };
@@ -39,6 +40,43 @@ export function createLevel2(C) {
       for (const kk of D.kicks) D.ramps.push(kk);
     }
     return D;
+  }
+  // Watchtowers are built level (one floor height), but several stand on steep stair pitches (up to 30 %):
+  // the deck used to run straight through them, so 1-2 m of brick plinth / end wall stood across the
+  // walkway at one end (the bike rode "through" the bricks). Level the deck inside every tower and blend
+  // it back to the original profile with a smooth (Hermite) ramp on each side, so the walkway meets the
+  // arch at floor level and you ride up into / down out of the tower. Everything (wall mesh, physics, AI,
+  // zombies, stair treads, nitro pads, jump placement) reads D.y, so visuals and collision stay matched.
+  function levelTowers(D) {
+    const ds = D.ds, Y0 = D.y.slice(), yAt = (s) => { const f = clamp(s / ds, 0, D.n - 1.001), i = f | 0, a = f - i; return Y0[i] + (Y0[i + 1] - Y0[i]) * a; };
+    const gAt = (s) => (yAt(s + 2) - yAt(s - 2)) / 4;
+    D.towerFix = [];
+    for (const ts of D.towers) {
+      const y0 = yAt(ts), IN = TOWER_L / 2 + 1.5; const fix = { ts, y0, sides: [] };
+      for (const sd of [-1, 1]) {
+        const sa = ts + sd * IN, dEnd = yAt(sa) - y0;
+        if (Math.abs(dEnd) < 0.05) { fix.sides.push([sd, 0, 0]); continue; }
+        const Lb = clamp(Math.abs(dEnd) / 0.07, 12, 40), sb = ts + sd * (IN + Lb), yb = yAt(sb), mb = gAt(sb) * sd * Lb;  // slope in u-units
+        for (let i = Math.max(0, Math.floor(Math.min(sa, sb) / ds)); i <= Math.min(D.n - 1, Math.ceil(Math.max(sa, sb) / ds)); i++) {
+          const u = clamp((i * ds - sa) / (sb - sa), 0, 1), u2 = u * u, u3 = u2 * u;
+          D.y[i] = (2 * u3 - 3 * u2 + 1) * y0 + (-2 * u3 + 3 * u2) * yb + (u3 - u2) * mb;
+        }
+        fix.sides.push([sd, +dEnd.toFixed(2), Lb]);
+      }
+      for (let i = Math.max(0, Math.floor((ts - IN) / ds)); i <= Math.min(D.n - 1, Math.ceil((ts + IN) / ds)); i++) if (Math.abs(i * ds - ts) <= IN) D.y[i] = y0;
+      // round off sharp crests on the run-up / run-out (e.g. 30 % → -17 % in 3 m before tower 530 launched bikes
+      // 4 m high into the vault): smooth the profile until no crest/sag kinks more than 4 % grade per 2 m
+      const near = (s) => D.gaps.some(g => s > g[0] - 25 && s < g[1] + 15) || D.ramps.some(r => s > r[0] - 15 && s < r[1] + 5);
+      const idx = []; for (let i = Math.max(1, Math.floor((ts - 75) / ds)); i <= Math.min(D.n - 2, Math.ceil((ts + 75) / ds)); i++) { const si = i * ds; if (Math.abs(si - ts) > IN && !near(si)) idx.push(i); }
+      let pass = 0, worst = 0;
+      for (; pass < 400; pass++) { worst = 0;
+        for (const i of idx) worst = Math.max(worst, Math.abs(D.y[i + 1] - 2 * D.y[i] + D.y[i - 1]));
+        if (worst < 0.08) break;
+        const Yc = D.y.slice(); for (const i of idx) D.y[i] = Yc[i] * 0.5 + (Yc[i - 1] + Yc[i + 1]) * 0.25;
+      }
+      fix.smooth = pass; fix.kink = +worst.toFixed(3);
+      D.towerFix.push(fix);
+    }
   }
   function TH(x, z) {
     const { n, h, half, cell } = TG;
@@ -80,7 +118,9 @@ export function createLevel2(C) {
   // ------------------------------------------------------------------ materials (Poly Haven CC0)
   const TL = new THREE.TextureLoader();
   const aniso = Math.min(IS_MOBILE ? 4 : 8, renderer.capabilities.getMaxAnisotropy());
-  function tx(name, srgb, rep) { const t = TL.load('./assets/l2/' + name + '.jpg'); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = aniso; t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; if (rep) t.repeat.set(rep, rep); return t; }
+  const TEXP = [];   // pending texture loads (awaited behind the fade before the cutscene)
+  const tload = (url) => { let done; TEXP.push(new Promise(r => { done = r; })); return TL.load(url, () => done(), undefined, () => done()); };
+  function tx(name, srgb, rep) { const t = tload('./assets/l2/' + name + '.jpg'); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = aniso; t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; if (rep) t.repeat.set(rep, rep); return t; }
   let M = null;
   function weather(mat, opt = {}) {
     // grime streaks, moss on up-facing / low surfaces, per-block tone variation (world-space, no extra uvs)
@@ -250,7 +290,7 @@ export function createLevel2(C) {
     const VR = Math.min(HW, 4.1);   // vault rise over the (wide) passage
     for (const ts of D.towers) {
       const f = frame(ts, { ..._f }); const yaw = Math.atan2(f.tx, f.tz), y = f.y;
-      const L = 12.5, side = 1.9, Wt = W + 2 * side, H2 = 10.6, T = 1.1;
+      const L = TOWER_L, side = 1.9, Wt = W + 2 * side, H2 = 10.6, T = 1.1;
       const gy = Math.min(TH(f.x + f.rx * Wt / 2, f.z + f.rz * Wt / 2), TH(f.x - f.rx * Wt / 2, f.z - f.rz * Wt / 2), y) - 4;
       // plinth under the walkway
       box(parts, Wt, y - 0.05 - gy, L, 0, (gy + y - 0.05) / 2, 0, f, yaw);
@@ -481,7 +521,7 @@ export function createLevel2(C) {
     }
     g.setAttribute('color', new THREE.BufferAttribute(cols, 4));
     g.computeVertexNormals();
-    const sat = TL.load('./assets/l2/sat.jpg?v=1'); sat.colorSpace = THREE.SRGBColorSpace; sat.anisotropy = aniso;
+    const sat = tload('./assets/l2/sat.jpg?v=1'); sat.colorSpace = THREE.SRGBColorSpace; sat.anisotropy = aniso;
     const fg = tx('leaves_forest_ground_Diffuse', true), fgn = tx('leaves_forest_ground_nor_gl'), rk = tx('rocky_terrain_02_Diffuse', true), rkn = tx('rocky_terrain_02_nor_gl');
     const mat = new THREE.MeshStandardMaterial({ map: sat, normalMap: fgn, vertexColors: true, roughness: 0.95 });
     mat.onBeforeCompile = (sh) => {
@@ -732,7 +772,30 @@ export function createLevel2(C) {
     AK = AK || buildApacheKit(THREE, mergeGeometries, { mobile: IS_MOBILE });
     const A = AK.make(R.col, R.num, R.player ? 'Smith' : R.name, !IS_MOBILE);
     A.root.rotation.order = 'YXZ'; scene.add(A.root);
-    return { root: A.root, rotor: A.rotor, trotor: A.trotor, pos: new V3(), yaw: 0, rpm: 1 };
+    // motion-blur discs: at flight rpm the blades are hidden and a translucent swept disc is drawn instead
+    // (real blades at 30-60 fps strobe / wagon-wheel badly, especially on iPhone)
+    const dm = new THREE.MeshBasicMaterial({ map: rotorTex(), color: 0x1a1c1e, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+    const disc = new THREE.Mesh(AK.discG, dm); disc.position.copy(A.rotor.position); disc.renderOrder = 2; A.root.add(disc);
+    const tdm = dm.clone(); const tdisc = new THREE.Mesh(AK.tdiscG, tdm); tdisc.position.copy(A.trotor.position); tdisc.renderOrder = 2; A.root.add(tdisc);
+    return { root: A.root, rotor: A.rotor, trotor: A.trotor, disc, tdisc, pos: new V3(), yaw: 0, rpm: 1 };
+  }
+  let ROTT = null;
+  function rotorTex() {
+    if (ROTT) return ROTT;
+    const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d'), m = 64;
+    const gr = g.createRadialGradient(m, m, 4, m, m, 63);
+    gr.addColorStop(0, 'rgba(255,255,255,0.0)'); gr.addColorStop(0.12, 'rgba(255,255,255,0.9)'); gr.addColorStop(0.55, 'rgba(255,255,255,0.55)');
+    gr.addColorStop(0.9, 'rgba(255,255,255,0.75)'); gr.addColorStop(0.97, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(m, m, 63, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'destination-out'; for (let r = 14; r < 62; r += 7) { g.strokeStyle = 'rgba(0,0,0,0.12)'; g.lineWidth = 2; g.beginPath(); g.arc(m, m, r, 0, Math.PI * 2); g.stroke(); }
+    ROTT = new THREE.CanvasTexture(c); ROTT.colorSpace = THREE.SRGBColorSpace; return ROTT;
+  }
+  // spin + blur: blades visible only when slow; disc opacity follows rpm (frame-rate independent)
+  function rotorFx(H, dt) {
+    H.rotor.rotation.y += H.rpm * 26 * dt; H.trotor.rotation.x += H.rpm * 70 * dt;
+    const fast = H.rpm > 0.45, k = clamp((H.rpm - 0.2) / 0.5, 0, 1);
+    H.rotor.visible = !fast; H.trotor.visible = !fast;
+    if (H.disc) { H.disc.material.opacity = 0.42 * k; H.disc.visible = k > 0.01; H.disc.rotation.y += H.rpm * 3 * dt; H.tdisc.material.opacity = 0.5 * k; H.tdisc.visible = k > 0.01; }
   }
 
   const GRID = [[0, 0], [-4.4, 0], [4.4, 0], [-2.2, -7], [2.2, -7], [-4.4, -14], [4.4, -14]];   // [lat, ds] from the start line
@@ -781,6 +844,8 @@ export function createLevel2(C) {
     RACERS.forEach(R => { if (!R.walker) R.walker = makeWalker(R); if (R.walker) R.walker.g.visible = false; });
     setRidersVisible(false);
     if (opts.skip === 'race') { toCountdown(); fade.style.opacity = 0; ui.title.style.opacity = 0; return; }
+    await warmup();
+    if (phase !== 'warm') return;   // skipped / stopped while warming
     startFlight();
   }
   function showHud(v) { for (const id of ['mobile', 'stats']) { const e = $(id); if (e) e.style.visibility = v ? '' : 'hidden'; } }
@@ -789,28 +854,75 @@ export function createLevel2(C) {
   // ------------------------------------------------------------------ cutscene: fly-in, landing, walk
   const FLY_T = 13, LAND_T = 8.5, WALK_MAX = 14;
   let flyS0 = 0;
+  // Behind the black fade: wait for the textures (satellite terrain, brick, stone), compile every shader and
+  // render each cutscene viewpoint once, so nothing compiles / uploads / pops in mid-flight (iPhone stutter).
+  const raf = () => new Promise(r => requestAnimationFrame(() => r()));
+  async function warmup() {
+    phase = 'warm'; const t0 = performance.now(); WARM.steps = 0;
+    await Promise.race([Promise.all(TEXP), new Promise(r => setTimeout(r, 9000))]);
+    flyS0 = Math.min(D.len - 50, 820); buildFlightPath();
+    try { const seen = new Set(); scene.traverse(o => { const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+        for (const m of ms) for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'alphaMap', 'emissiveMap']) { const t = m[k]; if (t && !seen.has(t) && t.image) { seen.add(t); renderer.initTexture && renderer.initTexture(t); } } });
+      WARM.tex = seen.size; } catch (e) { console.warn('[l2] warm tex', e); }
+    try { if (renderer.compileAsync) await renderer.compileAsync(scene, camera); else renderer.compile(scene, camera); } catch (e) { try { renderer.compile(scene, camera); } catch (e2) {} }
+    RACERS.forEach(R => { R.heli.rpm = 1; });
+    for (const [ph, t] of [['flight', 0.4], ['flight', 2.5], ['flight', 5], ['flight', 7.5], ['flight', 10], ['flight', 12.5], ['land', 1.5], ['land', 5.5]]) {
+      if (!active || (phase !== 'warm' && phase !== 'warmview')) break;
+      phase = 'warmview'; clock = t; WARM.ph = ph; camShot = -1; warmView(ph, t); await raf(); await raf(); WARM.steps++;
+    }
+    RACERS.forEach(R => { R.heli.td = false; R.heli.rpm = 1; }); camShot = -1;
+    WARM.ms = Math.round(performance.now() - t0);
+    if (phase === 'warmview') phase = 'warm';
+  }
+  const WARM = { ms: 0, steps: 0, tex: 0 };
+  function warmView(ph, t) { const keep = phase; phase = ph; clock = t; updateFlight(0); phase = keep; }
   function startFlight() {
-    phase = 'flight'; clock = 0; flyS0 = Math.min(D.len - 50, 820);
+    phase = 'flight'; clock = 0; flyS0 = Math.min(D.len - 50, 820); buildFlightPath();
+    RACERS.forEach(R => { R.heli.rpm = 1; });
     ui.skip.style.display = 'block';
-    setTimeout(() => { ui.fade.style.opacity = 0; }, 300);
+    setTimeout(() => { ui.fade.style.opacity = 0; }, 150);
     setTimeout(() => { ui.title.style.opacity = 0; }, 3800);
   }
   const FORM = [[0, 0, 0], [-16, -14, 3], [16, -14, -2], [-32, -28, 5], [32, -28, 1], [-16, -42, -3], [16, -42, 4]];
   const _a = new V3(), _b = new V3(), _c = new V3();
-  function flightLead(t) {
-    // follows the wall (backwards from s0 toward the start terrace), ~70 m above the crest
+  // raw lead: follows the wall (backwards from s0 toward the start terrace), ~70 m above the crest
+  function flightLeadRaw(t) {
     const u = clamp(t / FLY_T, 0, 1), e = 1 - Math.pow(1 - u, 1.6);
     const s = lerp(flyS0, D.start + 70, e), f = frame(s, { ..._f });
     let maxY = f.y; for (let k = -6; k <= 6; k++) maxY = Math.max(maxY, frame(s + k * 15, { ..._f }).y);
     return { x: f.x + f.rx * 40, y: maxY + 75 - 30 * sstep(0.75, 1, u), z: f.z + f.rz * 40, hx: -f.tx, hz: -f.tz };
   }
+  // The raw lead jittered: the wall's tangent wiggles (heading flicks swing the 32 m wing slots sideways)
+  // and the sliding max-height window steps. Pre-sample it, smooth position + heading (Gaussian passes),
+  // then interpolate: formation and cameras ride one continuous, frame-rate-independent path.
+  let FP = null; const FP_DT = 0.1;
+  function buildFlightPath() {
+    const n = Math.ceil(FLY_T / FP_DT) + 1, X = [], Y = [], Z = [];
+    for (let i = 0; i < n; i++) { const L = flightLeadRaw(i * FP_DT); X.push(L.x); Y.push(L.y); Z.push(L.z); }
+    const smooth = (A, passes, r) => { for (let p = 0; p < passes; p++) { const B = A.slice(); for (let i = 0; i < n; i++) { let sum = 0, w = 0; for (let k = -r; k <= r; k++) { const j = clamp(i + k, 0, n - 1), ww = r + 1 - Math.abs(k); sum += B[j] * ww; w += ww; } A[i] = sum / w; } } return A; };
+    smooth(X, 3, 8); smooth(Z, 3, 8); smooth(Y, 3, 10);
+    const HX = [], HZ = [];
+    for (let i = 0; i < n; i++) { const a = Math.max(0, i - 3), b = Math.min(n - 1, i + 3); let hx = X[b] - X[a], hz = Z[b] - Z[a]; const l = Math.hypot(hx, hz) || 1; HX.push(hx / l); HZ.push(hz / l); }
+    smooth(HX, 2, 6); smooth(HZ, 2, 6);
+    FP = { n, X, Y, Z, HX, HZ };
+  }
+  function flightLead(t) {
+    if (!FP) buildFlightPath();
+    const f = clamp(t / FP_DT, 0, FP.n - 1.0001), i = f | 0, a = f - i, L = (A) => A[i] + (A[i + 1] - A[i]) * a;
+    let hx = L(FP.HX), hz = L(FP.HZ); const l = Math.hypot(hx, hz) || 1;
+    return { x: L(FP.X), y: L(FP.Y), z: L(FP.Z), hx: hx / l, hz: hz / l };
+  }
+  // portrait: widen the vertical FOV (capped) and pull the camera back so the formation + wall still fit
+  function camFit(fov) { const asp = camera.aspect || 1; if (asp >= 1) return { fov, k: 1 };
+    const hf = 2 * Math.atan(Math.tan(fov * Math.PI / 360) * 1.6), fv = Math.min(74, 2 * Math.atan(Math.tan(hf * 0.62 / 2) / asp) * 180 / Math.PI);
+    return { fov: fv, k: clamp(1 + (1 - asp) * 0.9, 1, 1.6) }; }
   function updateFlight(dt) {
     const t = clock;
     RACERS.forEach((R, i) => {
       const H = R.heli, [ox, oz, oy] = FORM[i];
       let tx, ty, tz, yaw;
       if (phase === 'flight') {
-        const L = flightLead(t + 0.02 * i);
+        const L = flightLead(t);
         yaw = Math.atan2(L.hx, L.hz);
         const rx = Math.cos(yaw), rz = -Math.sin(yaw);   // heli right (model +Z forward)
         tx = L.x + rx * ox + L.hx * oz; tz = L.z + rz * ox + L.hz * oz; ty = L.y + oy + Math.sin(t * 0.9 + i) * 1.2;
@@ -830,25 +942,40 @@ export function createLevel2(C) {
         else H.td = false;
       }
       H.pos.set(tx, ty, tz); H.yaw = yaw; H.root.position.copy(H.pos);
-      H.rotor.rotation.y += H.rpm * 26 * dt; H.trotor.rotation.x += H.rpm * 70 * dt;
+      rotorFx(H, dt);
     });
-    // cinematic camera: 3 shots
+    // cinematic camera: 3 shots, all framed so the wall / ridge fills the lower part of the picture
     const L = RACERS[0].heli;
     if (phase === 'flight') {
-      if (t < 4.5) { const f = frame(flyS0 - 260, { ..._f }); camera.position.set(f.x - f.rx * 14, f.y + 6, f.z - f.rz * 14); camera.lookAt(L.pos.x, L.pos.y - 4, L.pos.z); camera.fov = 50; }
-      else if (t < 9) { const yaw = L.yaw, rx = Math.cos(yaw), rz = -Math.sin(yaw), fx = Math.sin(yaw), fz = Math.cos(yaw);
-        camera.position.set(L.pos.x + rx * 48 + fx * 10, L.pos.y + 8, L.pos.z + rz * 48 + fz * 10); camera.lookAt(L.pos.x - fx * 8, L.pos.y - 3, L.pos.z - fz * 8); camera.fov = 46; }
-      else { const fx = Math.sin(L.yaw), fz = Math.cos(L.yaw); camera.position.set(L.pos.x - fx * 30, L.pos.y + 9, L.pos.z - fz * 30); const f = frame(D.start, { ..._f }); camera.lookAt(f.x, f.y, f.z); camera.fov = 52; }
+      const shot = t < 4.5 ? 0 : t < 9 ? 1 : 2;
+      const C0 = flightLead(t), fx = C0.hx, fz = C0.hz, rx = fz, rz = -fx;   // formation frame (smoothed)
+      const cen = _c.set(C0.x - fx * 20, C0.y, C0.z - fz * 20);              // centre of the 7-ship formation
+      let fov, k, look;
+      if (shot === 0) {        // high, ahead and off to the side: formation coming at us over the ridge, wall below
+        ({ fov, k } = camFit(55)); _b.set(cen.x + fx * 72 * k + rx * 34 * k, cen.y + 14, cen.z + fz * 72 * k + rz * 34 * k);
+        const g = frame(clamp(flyS0 - 60, 0, D.len), { ..._f }); look = _a.set(lerp(cen.x, g.x, 0.15), lerp(cen.y - 6, g.y, 0.2), lerp(cen.z, g.z, 0.15));
+      } else if (shot === 1) { // side tracking, slightly above, looking down across the formation onto the wall
+        ({ fov, k } = camFit(48)); _b.set(cen.x + rx * 70 * k + fx * 12, cen.y + 22, cen.z + rz * 70 * k + fz * 12);
+        look = _a.set(cen.x - rx * 10 + fx * 8, cen.y - 14, cen.z - rz * 10 + fz * 8);
+      } else {                 // behind and above the lead, the start terrace ahead
+        ({ fov, k } = camFit(52)); _b.set(L.pos.x - fx * 34 * k, L.pos.y + 12 * k, L.pos.z - fz * 34 * k);
+        const f = frame(D.start, { ..._f }); look = _a.set(lerp(L.pos.x, f.x, 0.55), lerp(L.pos.y - 8, f.y, 0.55), lerp(L.pos.z, f.z, 0.55));
+      }
+      // hard cut on a shot change, otherwise a light frame-rate-independent damping (path is already smooth)
+      if (shot !== camShot) { camShot = shot; camP.copy(_b); camL.copy(look); }
+      else { camP.lerp(_b, 1 - Math.exp(-8 * dt)); camL.lerp(look, 1 - Math.exp(-8 * dt)); }
+      camera.position.copy(camP); camera.lookAt(camL); camera.fov = fov;
     } else {
       // low three-quarter shot on the player's Apache as it flares, hovers and touches down
-      const sp = spotW(...HSPOTS[0]), f = frame(D.start, { ..._f });
-      const cx = sp.x - f.tx * 16 + f.rx * 14, cz = sp.z - f.tz * 16 + f.rz * 14;
+      const sp = spotW(...HSPOTS[0]), f = frame(D.start, { ..._f }), { fov, k } = camFit(50);
+      const cx = sp.x - f.tx * 16 * k + f.rx * 14 * k, cz = sp.z - f.tz * 16 * k + f.rz * 14 * k;
       _b.set(cx, D.plaza[2] + 2.2 + Math.max(0, L.pos.y - D.plaza[2]) * 0.35, cz);
-      if (t < 0.05) camera.position.copy(_b); else camera.position.lerp(_b, 1 - Math.exp(-2 * dt));
-      _c.set(L.pos.x, L.pos.y + 1.5, L.pos.z); camera.lookAt(_c); camera.fov = 50;
+      if (camShot !== 3) { camShot = 3; camera.position.copy(_b); } else camera.position.lerp(_b, 1 - Math.exp(-2 * dt));
+      _c.set(L.pos.x, L.pos.y + 1.5, L.pos.z); camera.lookAt(_c); camera.fov = fov;
     }
     camera.updateProjectionMatrix();
   }
+  let camShot = -1;
   // walk: each racer exits the door, walks through the gate onto the wall, to its bike
   function startWalk() {
     phase = 'walk'; clock = 0;
@@ -899,9 +1026,9 @@ export function createLevel2(C) {
   function toCountdown() {
     if (ZM) ZM.reset(); if (ZV) ZV.forEach(V => { V.grabbedBy = null; }); PL.zg = null;
     phase = 'countdown'; clock = 0; cdT = 3.2; ui.skip.style.display = 'none'; showHud(true);
-    RACERS.forEach(R => { if (R.walker) R.walker.g.visible = false; if (R.heli) { R.heli.pos.copy(spotW(...HSPOTS[RACERS.indexOf(R)])); R.heli.root.position.copy(R.heli.pos); const f = frame(D.start, { ..._f }); R.heli.root.rotation.set(0, Math.atan2(f.tx, f.tz), 0); R.heli.rpm = 0.12; } });
+    RACERS.forEach(R => { if (R.walker) R.walker.g.visible = false; if (R.heli) { R.heli.pos.copy(spotW(...HSPOTS[RACERS.indexOf(R)])); R.heli.root.position.copy(R.heli.pos); const f = frame(D.start, { ..._f }); R.heli.root.rotation.set(0, Math.atan2(f.tx, f.tz), 0); R.heli.rpm = 0.12; rotorFx(R.heli, 0); } });
     setRidersVisible(true); placeBikes();
-    camera.position.set(PL.x, PL.y + 3, PL.z);
+    camera.position.set(PL.x, PL.y + 3, PL.z); camShot = -1; chaseCam(1 / 60, true);
   }
   function updateCountdown(dt) {
     const prev = Math.ceil(cdT); cdT -= dt; const now = Math.ceil(cdT);
@@ -986,8 +1113,21 @@ export function createLevel2(C) {
     P.pitch += (clamp(pitchT, -0.6, 0.6) - P.pitch) * Math.min(1, (P.grounded ? 14 : 3.2) * dt);
     const rollT = clamp(-P.steerS * (0.12 + 0.2 * Math.min(1, P.speed / 22)), -0.34, 0.34);
     P.roll += (rollT - P.roll) * Math.min(1, 6.5 * dt);
+    // safety net: stuck (< 2 km/h) with the throttle open for 3 s and nothing holding the bike → hop forward
+    // (measured as progress: < 1.5 m along the wall in 3 s, i.e. under ~2 km/h average)
+    if (!fin && phase === 'race' && gas && !zHeld && !(P.falling > 0)) {
+      const k = P.stk || (P.stk = { s: P.s, t: raceT });
+      if (Math.abs(P.s - k.s) > 1.5) { k.s = P.s; k.t = raceT; } else if (raceT - k.t > 3) { P.stk = null; unstick(); }
+    } else P.stk = null;
     const R0 = RACERS[0];
     if (!R0.finished && P.s >= D.finish) { R0.finished = true; R0.finishT = raceT; finishOrder.push(R0); toast('FINISH!', 2000); }
+  }
+  // nearest safe spot ≥ 6 m ahead: solid deck, not on a ramp/tabletop, not inside a tower
+  function safeAhead(s0) { let s = s0 + 6; for (let k = 0; k < 80 && (inGap(s) || inGap(s + 3) || rampH(s) > 0 || towerAt(s)); k++) s += 2; return Math.min(s, D.finish - 2); }
+  function unstick() {
+    const P = PL, s = safeAhead(P.s), lat = clamp(P.lat, -LATMAX + 1, LATMAX - 1), f = frame(s, { ..._f });
+    Object.assign(P, { s, lat, x: f.x + f.rx * lat, z: f.z + f.rz * lat, y: surf(s) ?? f.y, vy: 0, speed: 8, grounded: true, falling: 0, airT: 0, yaw: yawOf(f), pitch: 0, roll: 0, steerS: 0, leanS: 0, steerAng: 0 });
+    UNSTUCK.n++; toast('UNSTUCK · nudged forward', 1100);
   }
   function respawn() {
     const P = PL, f = frame(P.cp + 2, { ..._f });
@@ -1002,6 +1142,7 @@ export function createLevel2(C) {
     if (SUN) { SUN.target.position.set(P.x, P.y, P.z); SUN.position.copy(SUNDIR).multiplyScalar(300).add(SUN.target.position); }
   }
   const finishOrder = [];
+  const UNSTUCK = { n: 0, ai: 0 };
   function poseRacer(R, dt) {
     if (R.player) return;
     const a = R.a, f = frame(R.s, { ..._f });
@@ -1030,6 +1171,8 @@ export function createLevel2(C) {
       { const V = ZV && ZV[i]; if (V && V.grabbedBy) { R.spd = Math.max(0, R.spd - 40 * dt); R.zgT = (R.zgT || 0) + dt; if (R.zgT > 1.8 + (i % 3) * 0.4) { ZM.release(V, 'shake'); R.zgT = 0; } } }
       if (R.grounded && !R.finished && PADS.some(Q => R.s < Q.s - 3.5 && R.s + R.spd * dt >= Q.s - 3.5)) { R.boost = BOOST_T; NITRO.aiHits++; if (R.a.root.position.distanceTo(camera.position) < 60) whoosh(0.35); }
       if (!R.flame) R.flame = attachFlame(R.a.root); flameFx(R.flame, R.boost > 0, dt);
+      if (!R.finished && phase === 'race' && R.spd < 0.55 && !(ZV && ZV[i] && ZV[i].grabbedBy)) R.stT = (R.stT || 0) + dt; else R.stT = 0;
+      if (R.stT > 3) { R.stT = 0; R.s = safeAhead(R.s); R.y = surf(R.s) ?? frame(R.s).y; R.vy = 0; R.grounded = true; R.spd = 10; UNSTUCK.ai++; }
       R.s += R.spd * dt;
       // lanes: spread out, stay off the parapets, avoid the player
       const LW = LATMAX - 1.0, nL = 6;
@@ -1121,7 +1264,7 @@ export function createLevel2(C) {
     ui = { fade: mk('l2fade'), title: mk('l2title'), skip: mk('l2skip', 'button'), res: mk('l2res') };
     ui.title.innerHTML = 'LEVEL 2 · THE GREAT WALL<small>JINSHANLING RIDGE · HEBEI, CHINA</small>';
     ui.skip.textContent = 'SKIP ▶';
-    ui.skip.onclick = (e) => { e.preventDefault(); if (phase === 'flight' || phase === 'land' || phase === 'walk') { RACERS.forEach(R => { if (R.walker) { R.walker.done = true; R.walker.g.visible = false; } }); ui.title.style.opacity = 0; ui.fade.style.opacity = 0; toCountdown(); } };
+    ui.skip.onclick = (e) => { e.preventDefault(); if (phase === 'flight' || phase === 'land' || phase === 'walk' || phase === 'warm' || phase === 'warmview') { RACERS.forEach(R => { if (R.walker) { R.walker.done = true; R.walker.g.visible = false; } }); ui.title.style.opacity = 0; ui.fade.style.opacity = 0; toCountdown(); } };
     ui.skip.addEventListener('touchend', ui.skip.onclick, { passive: false });
     return ui.fade;
   }
@@ -1130,10 +1273,10 @@ export function createLevel2(C) {
   function update(dt) {
     if (!active) return;
     clock += dt;
-    if (phase === 'load') return;
+    if (phase === 'load' || phase === 'warm' || phase === 'warmview') return;
     if (phase === 'flight') { updateFlight(dt); if (clock > FLY_T) { phase = 'land'; clock = 0; } }
     else if (phase === 'land') { updateFlight(dt); if (clock > LAND_T) startWalk(); }
-    else if (phase === 'walk') { updateWalk(dt); RACERS.forEach(R => { R.heli.rotor.rotation.y += R.heli.rpm * 26 * dt; R.heli.rpm = Math.max(0.1, R.heli.rpm - dt * 0.2); }); }
+    else if (phase === 'walk') { updateWalk(dt); RACERS.forEach(R => { R.heli.rpm = Math.max(0.1, R.heli.rpm - dt * 0.2); rotorFx(R.heli, dt); }); }
     else if (phase === 'countdown') updateCountdown(dt);
     else if (phase === 'race' || phase === 'done') {
       raceT += dt;
@@ -1145,6 +1288,6 @@ export function createLevel2(C) {
     if (SKY) SKY.position.copy(camera.position);
     if (SUN && phase !== 'race' && phase !== 'done' && phase !== 'countdown') { SUN.target.position.copy(camera.position); SUN.position.copy(SUNDIR).multiplyScalar(300).add(SUN.target.position); }
   }
-  return { start, update, scene, get active() { return active; }, get phase() { return phase; },
-    dbg: { get D() { return D; }, NITRO, get ZM() { return ZM; }, zViews, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
+  return { start, update, scene, get active() { return active; }, get phase() { return phase; }, get clock() { return clock; },
+    dbg: { scene, renderer, UNSTUCK, unstick, TH, WARM, flightLead, flightLeadRaw, get D() { return D; }, NITRO, get ZM() { return ZM; }, zViews, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
 }

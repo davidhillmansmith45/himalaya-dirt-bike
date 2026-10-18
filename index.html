@@ -90,7 +90,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRider, makeGearMaterial } from './rider.js?v=m5';
 import { EV_S0, EV_X, EV_Z, EV_B, ALT_R0, ALT_RSTEP, ALT_R, EV_WP } from './course_everest.js?v=1';
-import { makeOutdoorEnv, makePost, contactShadow, makeGovernor } from './gfx.js?v=1';
+import { makeOutdoorEnv, makePost, contactShadow, makeGovernor } from './gfx.js?v=2';
 import { createEndgame } from './endgame.js?v=7';
 import { createNitroFx } from './nitro.js?v=1';
 import { createBikeSound } from './bikesnd.js?v=1';
@@ -5159,7 +5159,7 @@ let L2 = null, L2loading = null;
 function startLevel2(opts) {
   if (L2loading) return L2loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l2] eg stop', e); }
-  L2loading = import('./level2.js?v=8').then(mod => {
+  L2loading = import('./level2.js?v=9').then(mod => {
     L2 = mod.createLevel2({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L2 = L2;
@@ -5229,8 +5229,10 @@ function frame(now) {
   last = now;
   if (L2 && L2.active) {
     try { L2.update(dt); } catch (e) { reportOnce('level2', e); }
+    if (POST) POST.holdChecks = L2.phase === 'flight' || L2.phase === 'land' || L2.phase === 'walk';
     bikeSound(dt, true);
-    try { GOV(rawDt, true); } catch (e) {}
+    // quality governor only during play: a resolution / MSAA step mid-cutscene is a visible pop
+    try { GOV(rawDt, L2.phase === 'race' || L2.phase === 'done' || L2.phase === 'countdown'); } catch (e) {}
     if (POST && POST.enabled && !postFailed) { try { POST.render(L2.scene, camera); } catch (e) { postFailed = true; renderer.setRenderTarget(null); renderer.render(L2.scene, camera); } }
     else renderer.render(L2.scene, camera);
     requestAnimationFrame(frame);

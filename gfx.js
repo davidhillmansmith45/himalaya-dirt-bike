@@ -206,7 +206,7 @@ export function makePost(renderer, { mobile }) {
     pass(comp, null);
     renderer.autoClear = prevAuto;
     // safety net: if the composited frame comes out black (driver can't do this pipeline), give up on post
-    P.frames++;
+    if (!P.holdChecks) P.frames++;   // (held during cutscenes: the 1-px readPixels is a full GPU sync = visible hitch)
     if (P.frames === 12 || P.frames === 40 || P.frames === 90) {
       const px = new Uint8Array(4);
       gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight - 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
