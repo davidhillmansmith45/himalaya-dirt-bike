@@ -5,7 +5,7 @@
   const save = (p) => { try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (e) {} };
   const P = window.HDBProgress = {
     get: load,
-    // l1: Everest race finished; dw: Dragon War completed (survived to the end); l2: Great Wall race finished
+    // l1: Everest race finished; dw: Dragon War completed (survived to the end); l2: Great Wall race finished; l3: rescued (Tsunami)
     mark(id, info) { const p = load(); const o = p[id] || {}; o.done = true; o.n = (o.n || 0) + 1;
       if (info && info.time != null) o.best = o.best == null ? info.time : Math.min(o.best, info.time);
       if (info && info.place != null) o.bestPlace = o.bestPlace == null ? info.place : Math.min(o.bestPlace, info.place);
@@ -13,7 +13,7 @@
       if (info && info.win) o.won = true;
       p[id] = o; save(p); },
     reset() { try { localStorage.removeItem(KEY); } catch (e) {} },
-    unlocked(id) { const p = load(); return id === 'l1' || (id === 'dw' && !!(p.l1 && p.l1.done)) || (id === 'l2' && !!(p.dw && p.dw.done)); },
+    unlocked(id) { const p = load(); return id === 'l1' || (id === 'dw' && !!(p.l1 && p.l1.done)) || (id === 'l2' && !!(p.dw && p.dw.done)) || (id === 'l3' && !!(p.l2 && p.l2.done)); },
   };
   const LV = [
     { id: 'l1', n: 'LEVEL 1', name: 'Himalayas', sub: 'Race to Everest', img: 'assets/menu/l1.jpg',
@@ -25,6 +25,9 @@
     { id: 'l2', n: 'LEVEL 2', name: 'Great Wall', sub: 'Jinshanling ridge, China', img: 'assets/menu/l2.jpg',
       desc: 'Fly in by Apache and race on top of the Great Wall: gap jumps, tabletops, watchtowers, nitro pads — and zombies climbing the walls.',
       need: 'Complete the Dragon War to unlock' },
+    { id: 'l3', n: 'LEVEL 3', name: 'Tsunami', sub: 'Pacific coast', img: 'assets/menu/l3.jpg',
+      desc: 'Beach race on wet and soft sand, dunes and boardwalk — until the sea pulls back. Outrun the tsunami to high ground, then swim for the rescue boat through ten sharks.',
+      need: 'Finish the Great Wall race to unlock' },
   ];
   const css = `
 #lvMenu{position:fixed;inset:0;z-index:7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2.2vh;
@@ -57,6 +60,7 @@
 #lvMenu .foot{display:flex;gap:18px;align-items:center;font-size:clamp(.58rem,1.1vw,.75rem);opacity:.75}
 #lvMenu .foot kbd{background:rgba(255,255,255,.12);border-radius:4px;padding:1px 5px}
 #lvReset{background:none;border:1px solid rgba(255,255,255,.25);color:#ddd;border-radius:8px;padding:4px 10px;font-size:inherit;cursor:pointer}
+@media (max-aspect-ratio:1/1){ #lvMenu .row{flex-wrap:wrap} .lvc{flex:1 1 42%;max-width:48%} .lvc p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden} }
 @media (max-height:430px){ #lvMenu{gap:1.2vh} .lvc p{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden} .lvc .play{padding:7px 0} #lvMenu .ttl small{display:none} }
 `;
   const fmt = (s) => { s = +s; const m = Math.floor(s / 60); return (m ? m + ':' + String((s % 60).toFixed(1)).padStart(4, '0') : s.toFixed(1) + 's'); };
@@ -92,7 +96,7 @@
     if (!P.unlocked(L.id)) { const c = root.querySelectorAll('.lvc')[sel]; if (c) { c.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-8px)' }, { transform: 'translateX(8px)' }, { transform: 'translateX(0)' }], { duration: 260 }); } return; }
     try { window.SFXunlock && window.SFXunlock(); } catch (e) {}
     if (L.id === 'l1') { hide(); const go = document.getElementById('go'); if (go) go.click(); return; }
-    waitReady(() => { hide(); if (L.id === 'dw') window.__launchDragonWar(); else window.__startLevel2({}); });
+    waitReady(() => { hide(); if (L.id === 'dw') window.__launchDragonWar(); else if (L.id === 'l3') window.__startLevel3({}); else window.__startLevel2({}); });
   }
   function show() { root.classList.remove('hidden'); render(); }
   window.HDBMenu = { show, hide, render, get visible() { return root && !root.classList.contains('hidden'); } };
@@ -102,7 +106,7 @@
     root.innerHTML = `<div class="ttl"><h1>HIMALAYA DIRT BIKE</h1><small>SELECT LEVEL</small></div><div class="row"></div>
       <div class="foot"><span><kbd>←</kbd><kbd>→</kbd> choose · <kbd>Enter</kbd> play</span><button id="lvReset">Reset progress</button></div>`;
     document.body.appendChild(root);
-    root.querySelector('#lvReset').onclick = (e) => { e.stopPropagation(); if (confirm('Reset all level progress? Great Wall will lock again.')) { P.reset(); sel = 0; render(); } };
+    root.querySelector('#lvReset').onclick = (e) => { e.stopPropagation(); if (confirm('Reset all level progress? Later levels will lock again.')) { P.reset(); sel = 0; render(); } };
     addEventListener('keydown', (e) => { if (root.classList.contains('hidden')) return;
       if (e.code === 'ArrowRight' || e.code === 'KeyD') { sel = (sel + 1) % LV.length; mark(); e.preventDefault(); }
       else if (e.code === 'ArrowLeft' || e.code === 'KeyA') { sel = (sel + LV.length - 1) % LV.length; mark(); e.preventDefault(); }

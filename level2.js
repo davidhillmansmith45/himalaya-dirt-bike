@@ -1241,10 +1241,17 @@ export function createLevel2(C) {
     if (RACERS[0].finished && !showResults.marked) { showResults.marked = true; try { window.HDBProgress && window.HDBProgress.mark('l2', { time: +RACERS[0].finishT.toFixed(1), place: me }); } catch (e) {} }
     ui.res.innerHTML = '<h1>' + (me === 1 ? 'YOU CONQUERED THE GREAT WALL!' : 'GREAT WALL · P' + me) + '</h1><p>' +
       all.map((R, i) => (i + 1) + '. ' + (R.player ? '<b>45 YOU</b>' : R.num + ' ' + R.name) + (R.finished ? ' — ' + R.finishT.toFixed(1) + 's' : ' — DNF')).join('<br>') +
-      '</p><button id="l2Again">RACE THE WALL AGAIN</button> <button id="l2Back">LEVEL SELECT</button>';
+      '</p><div><button id="l2Next" style="background:linear-gradient(180deg,#7fe0ff,#2a9fd8);color:#04121c">LEVEL 3 · TSUNAMI ▶</button></div><button id="l2Again">RACE THE WALL AGAIN</button> <button id="l2Back">LEVEL SELECT</button>';
     ui.res.style.display = 'flex';
     $('l2Again').onclick = () => { ui.res.style.display = 'none'; finishOrder.length = 0; showResults.marked = false; toCountdown(); };
     $('l2Back').onclick = () => { location.href = location.pathname; };
+    // straight on to Level 3: fade to black, hand the bikes over, start the tsunami level
+    $('l2Next').onclick = () => { ui.res.style.display = 'none'; ui.title.innerHTML = 'LEVEL 3 · TSUNAMI<small>PACIFIC COAST</small>'; ui.fade.style.display = ''; ui.fade.style.opacity = 1; ui.title.style.display = ''; ui.title.style.opacity = 1;
+      setTimeout(() => { if (window.__startLevel3) window.__startLevel3({}); }, 1300); };
+  }
+  function stop() {
+    active = false; phase = 'off'; speedLines(0);
+    if (ui) for (const k of Object.keys(ui)) ui[k].style.display = 'none';
   }
 
   // ------------------------------------------------------------------ UI
@@ -1288,6 +1295,6 @@ export function createLevel2(C) {
     if (SKY) SKY.position.copy(camera.position);
     if (SUN && phase !== 'race' && phase !== 'done' && phase !== 'countdown') { SUN.target.position.copy(camera.position); SUN.position.copy(SUNDIR).multiplyScalar(300).add(SUN.target.position); }
   }
-  return { start, update, scene, get active() { return active; }, get phase() { return phase; }, get clock() { return clock; },
+  return { start, stop, update, scene, get active() { return active; }, get phase() { return phase; }, get clock() { return clock; },
     dbg: { scene, renderer, UNSTUCK, unstick, TH, WARM, flightLead, flightLeadRaw, get D() { return D; }, NITRO, get ZM() { return ZM; }, zViews, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
 }

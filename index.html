@@ -78,7 +78,7 @@ button#go:active{transform:translateY(1px)}
     <div class="credit">Imja Valley, Khumbu (Nepal) from real elevation data. Terrain: SRTM via AWS Terrain Tiles. Snow/rock tint: Sentinel-2 cloudless 2024 by EOX IT Services GmbH (CC BY-NC-SA 4.0), contains modified Copernicus Sentinel data 2024. Boulder + dirt scans: Poly Haven (CC0). Rider body: MakeHuman/MPFB via Innerscene (CC0). Wolf growl: newagesoup / Freesound (CC BY 3.0); dog snarls: Lisa Redfern / SoundBible (public domain).</div>
   </div>
 </div>
-<script src="menu.js?v=1"></script>
+<script src="menu.js?v=2"></script>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}
 </script>
@@ -3515,10 +3515,10 @@ initRivals();
 
 let BSND = null;
 const _aiSnd = [];
-function bikeSound(dt, l2) {
+function bikeSound(dt, lv) {
   try {
-    const egOn = !!(EG && EG.active), ph = l2 && L2.phase;
-    const active = !SFX.muted && (l2 ? (ph === 'race' || ph === 'done' || ph === 'countdown') : (state.running && !egOn && !state.kidnapped && !state.finished));
+    const egOn = !!(EG && EG.active), ph = lv && lv.phase, l2 = !!lv;
+    const active = !SFX.muted && (lv ? (lv.riding !== undefined ? lv.riding : (ph === 'race' || ph === 'done' || ph === 'countdown')) : (state.running && !egOn && !state.kidnapped && !state.finished));
     _aiSnd.length = 0; if (active) for (const a of AI) if (a.root.visible && !a.dismounted) _aiSnd.push({ pos: a.root.position, spd: a.spd || 0 });
     if (!BSND) BSND = createBikeSound(SFX);
     BSND.update(dt, { active, gas: state.inGas, brake: state.inBrake, speed: state.speed || 0, vmax: l2 ? 34 : 44, grounded: state.grounded !== false, sliding: state.sliding }, _aiSnd, camera.position);
@@ -5159,7 +5159,7 @@ let L2 = null, L2loading = null;
 function startLevel2(opts) {
   if (L2loading) return L2loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l2] eg stop', e); }
-  L2loading = import('./level2.js?v=9').then(mod => {
+  L2loading = import('./level2.js?v=10').then(mod => {
     L2 = mod.createLevel2({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L2 = L2;
@@ -5173,6 +5173,21 @@ function startLevel2(opts) {
     b.onclick = () => { b.hidden = true; startLevel2(); }; }
 }
 window.__startLevel2 = startLevel2;
+// ---- LEVEL 3: Tsunami (level3.js, loaded on demand; from the menu or the Level 2 results)
+let L3 = null, L3loading = null;
+function startLevel3(opts) {
+  if (L3loading) return L3loading;
+  try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l3] eg stop', e); }
+  try { if (L2 && L2.active && L2.stop) L2.stop(); } catch (e) { console.warn('[l3] l2 stop', e); }
+  L3loading = import('./level3.js?v=1').then(mod => {
+    L3 = mod.createLevel3({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
+      getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
+    window.__game.L3 = L3;
+    return L3.start(opts || {});
+  }).catch(e => { console.error('[l3] load', e); L3loading = null; });
+  return L3loading;
+}
+window.__startLevel3 = startLevel3;
 let terrainOK = false; terrainReady.then(() => { terrainOK = true; });
 window.__levelReady = () => !!(terrainOK && aiReady && bike && bike.userData.isGlb && RIDER);
 window.SFXunlock = () => { try { SFX.unlock(); } catch (e) {} };
@@ -5189,6 +5204,10 @@ window.__launchDragonWar = () => {
   const qp = new URLSearchParams(location.search);
   if (qp.get('level') === '2') {
     const tm = setInterval(() => { if (aiReady && bike && bike.userData.isGlb && RIDER) { clearInterval(tm); terrainReady.then(() => startLevel2({ skip: qp.get('l2') })); } }, 250);
+  }
+  // ?level=3 (intro), ?level=3&l3=race (straight to the grid), ?level=3&l3=swim (straight into the ocean)
+  if (qp.get('level') === '3') {
+    const tm = setInterval(() => { if (aiReady && bike && bike.userData.isGlb && RIDER) { clearInterval(tm); terrainReady.then(() => startLevel3({ skip: qp.get('l3') })); } }, 250);
   }
 }
 window.__game = { get EG() { return EG; }, get gfx() { return POST; }, get BSND() { return BSND; }, AI, DRAGON, DRAGONS: DRAGON.list, BUF, BUFFALO_HITS, SFX, aiUpdate, aiReset, racePosition, EV_S0, EV_WP, CROSS_S, CROSS_OLD, mtnW, altAt, altShown, respawn, OLD_TOTAL, TRACK_LEN, CLIMB, GATE_S, FINISH_S, checkpoints, climbW, baseAt, courseNearest, terrainHeight: (x, z) => terrainHeightAt && terrainHeightAt(x, z), THREE, scene, camera, renderer, state, pathPoint, groundAt, reset, placeAtTrack, syncBike, terrainReady, propsReady, keys, physics, updateCamera, freeze: false, freezeWorld: false, camOverride: null, NITRO, pathTangent, HALF_W };
@@ -5227,14 +5246,17 @@ function frame(now) {
   const rawDt = (now - last) / 1000;
   const dt = Math.min(0.033, (now - last) / 1000);
   last = now;
-  if (L2 && L2.active) {
-    try { L2.update(dt); } catch (e) { reportOnce('level2', e); }
-    if (POST) POST.holdChecks = L2.phase === 'flight' || L2.phase === 'land' || L2.phase === 'walk';
-    bikeSound(dt, true);
+  const LV = (L3 && L3.active) ? L3 : (L2 && L2.active) ? L2 : null;
+  if (LV) {
+    try { LV.update(dt); } catch (e) { reportOnce(LV === L3 ? 'level3' : 'level2', e); }
+    const ph = LV.phase, play = LV === L3 ? (ph === 'race' || ph === 'countdown' || ph === 'swim') : (ph === 'race' || ph === 'done' || ph === 'countdown');
+    // no GPU read-back (black-frame check) during cutscenes / scripted moments: it stalls the pipeline mid-shot
+    if (POST) POST.holdChecks = LV === L3 ? !play : (ph === 'flight' || ph === 'land' || ph === 'walk');
+    bikeSound(dt, LV);
     // quality governor only during play: a resolution / MSAA step mid-cutscene is a visible pop
-    try { GOV(rawDt, L2.phase === 'race' || L2.phase === 'done' || L2.phase === 'countdown'); } catch (e) {}
-    if (POST && POST.enabled && !postFailed) { try { POST.render(L2.scene, camera); } catch (e) { postFailed = true; renderer.setRenderTarget(null); renderer.render(L2.scene, camera); } }
-    else renderer.render(L2.scene, camera);
+    try { GOV(rawDt, play); } catch (e) {}
+    if (POST && POST.enabled && !postFailed) { try { POST.render(LV.scene, camera); } catch (e) { postFailed = true; renderer.setRenderTarget(null); renderer.render(LV.scene, camera); } }
+    else renderer.render(LV.scene, camera);
     requestAnimationFrame(frame);
     return;
   }

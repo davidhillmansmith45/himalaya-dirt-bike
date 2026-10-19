@@ -1,0 +1,6 @@
+Level 3 "Tsunami" assets
+All textures are CC0 (public domain) from Poly Haven (https://polyhaven.com):
+  aerial_beach_01, coast_sand_01, coast_land_rocks_01, brown_planks_03, palm_bark
+  (+ aerial_grass_rock, shared with Level 2)
+All geometry (palms, sharks, swimmers, rescue boat, debris, wave) is procedural; all Level 3 audio
+(surf, siren, wave roar, sharks/tension, horn, birds) is synthesized at runtime with Web Audio.
