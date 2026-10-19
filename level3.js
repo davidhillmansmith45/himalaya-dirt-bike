@@ -350,7 +350,7 @@ export function createLevel3(C) {
           vec3 refl = skyCol(R, uSun);
           float spec = pow(max(dot(R, uSun), 0.0), 220.0) * 5.0 + pow(max(dot(R, uSun), 0.0), 18.0) * 0.12;
           // Maui palette: bright aqua over sand in the shallows -> turquoise -> deep sapphire offshore
-          vec3 deep = vec3(0.002, 0.028, 0.16), mid = vec3(0.003, 0.15, 0.16), shallow = vec3(0.035, 0.40, 0.31);
+          vec3 deep = vec3(0.002, 0.036, 0.15), mid = vec3(0.003, 0.15, 0.16), shallow = vec3(0.035, 0.40, 0.31);
           vec3 body = mix(shallow, mid, smoothstep(0.5, 3.0, vDepth)); body = mix(body, deep, smoothstep(4.0, 16.0, vDepth));
           // sun through clear shallow water: caustic shimmer over the sandy bottom
           float cau = vn(q * 0.8 + vec2(uTime * 0.6, uTime * 0.4)) * vn(q * 1.3 - vec2(uTime * 0.5, -uTime * 0.3));
@@ -590,7 +590,7 @@ export function createLevel3(C) {
       sh.vertexShader = 'uniform float uTime; varying vec3 vLp;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vec4 ip = instanceMatrix[3]; float sw = max(0.0, transformed.y - 2.0) * 0.025; transformed.x += sin(uTime * 1.3 + ip.x * 0.11) * sw; transformed.z += cos(uTime * 1.1 + ip.z * 0.13) * sw;')
         .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vLp = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = 'varying vec3 vLp;\nfloat lh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }\nfloat ln3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(mix(lh(i), lh(i+vec3(1,0,0)), f.x), mix(lh(i+vec3(0,1,0)), lh(i+vec3(1,1,0)), f.x), f.y), mix(mix(lh(i+vec3(0,0,1)), lh(i+vec3(1,0,1)), f.x), mix(lh(i+vec3(0,1,1)), lh(i+vec3(1,1,1)), f.x), f.y), f.z); }\n'
-        + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n { float l = ln3(vLp * 2.6) * 0.6 + ln3(vLp * 7.0) * 0.4; diffuseColor.rgb *= 0.62 + 0.75 * l; }');
+        + sh.fragmentShader.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n { vec3 q = vLp * 2.4; normal = normalize(normal + (vec3(ln3(q), ln3(q + 7.1), ln3(q + 13.7)) - 0.5) * 1.3); }').replace('#include <color_fragment>', '#include <color_fragment>\n { float l = ln3(vLp * 2.6) * 0.6 + ln3(vLp * 7.0) * 0.4; diffuseColor.rgb *= 0.62 + 0.75 * l; }');
     };
     mat.customProgramCacheKey = () => 'l3kiawe';
     const V = [0, 1, 2, 3, 4].map(i => kiaweGeo(i + 1));
