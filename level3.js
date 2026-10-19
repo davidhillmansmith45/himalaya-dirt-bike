@@ -30,7 +30,7 @@ export function createLevel3(C) {
   function H(x, z) {
     const d = z - zsh(x);
     let h;
-    if (d < 0) h = d < -160 ? -4.8 + (d + 160) * 0.045 : d * 0.03;       // seabed: gentle shelf then drop-off
+    if (d < 0) h = d < -160 ? -8.0 + (d + 160) * 0.045 : d * 0.05;       // seabed: gentle shelf then drop-off
     else h = d * 0.032;                                                     // beach
     // dunes behind the beach (broken by the course where it runs through)
     const dn = sstep(70, 92, d) * (1 - sstep(118, 140, d));
@@ -167,13 +167,15 @@ export function createLevel3(C) {
     const g = new THREE.PlaneGeometry(TB.x1 - TB.x0, TB.z1 - TB.z0, nx, nz); g.rotateX(-Math.PI / 2);
     g.translate((TB.x0 + TB.x1) / 2, 0, (TB.z0 + TB.z1) / 2);
     const p = g.attributes.position, uv = g.attributes.uv;
-    for (let i = 0; i < p.count; i++) { const x = p.getX(i), z = p.getZ(i); p.setY(i, H(x, z)); uv.setXY(i, x / 9, z / 9); }
+    const aC = new Float32Array(p.count);
+    for (let i = 0; i < p.count; i++) { const x = p.getX(i), z = p.getZ(i); p.setY(i, H(x, z)); uv.setXY(i, x / 9, z / 9); const d = z - zsh(x); aC[i] = (d > 120 && d < 600 && x > TB.x0 + 250 && offCourse(x, z, 7)) ? 1 : 0; }
+    g.setAttribute('aC', new THREE.BufferAttribute(aC, 1));
     g.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({ map: m.tDry, normalMap: m.nSand, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 1 });
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, { tWet: { value: m.tWet }, tRock: { value: m.tRock }, tGrass: { value: m.tGrass }, uRecede: U.uRecede, uSurge: U.uSurge });
-      sh.vertexShader = 'varying vec3 vWp; varying vec3 vWn;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWp = (modelMatrix * vec4(transformed,1.0)).xyz; vWn = normalize(mat3(modelMatrix) * objectNormal);');
-      sh.fragmentShader = 'uniform sampler2D tWet, tRock, tGrass; uniform float uRecede, uSurge; varying vec3 vWp; varying vec3 vWn;\n' + GLSL_GEO + `
+      sh.vertexShader = 'attribute float aC; varying float vC; varying vec3 vWp; varying vec3 vWn;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWp = (modelMatrix * vec4(transformed,1.0)).xyz; vWn = normalize(mat3(modelMatrix) * objectNormal); vC = aC;');
+      sh.fragmentShader = 'uniform sampler2D tWet, tRock, tGrass; uniform float uRecede, uSurge; varying float vC; varying vec3 vWp; varying vec3 vWn;\n' + GLSL_GEO + `
         float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
         float vn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f); return mix(mix(h21(i), h21(i+vec2(1,0)), u.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), u.x), u.y); }
         float wetK; float rockK;
@@ -181,36 +183,44 @@ export function createLevel3(C) {
         vec2 wuv = vWp.xz / 9.0;
         float d = vWp.z - zsh(vWp.x);
         float n1 = vn(vWp.xz * 0.045), n2 = vn(vWp.xz * 0.21 + 7.0);
-        vec3 dry = texture2D(map, wuv * 0.8).rgb * vec3(1.12, 0.98, 0.76);
-        vec3 wet = texture2D(tWet, wuv * 1.1).rgb * vec3(0.62, 0.57, 0.48);
+        // Makena golden-tan sand: keep the texture's grain, re-tint it warm and saturated
+        vec3 dt0 = texture2D(map, wuv * 0.8).rgb; float dl0 = dot(dt0, vec3(0.3, 0.5, 0.2));
+        vec3 dry = vec3(0.43, 0.27, 0.095) * (0.55 + 0.45 * dl0 / 0.245) * mix(0.94, 1.05, vn(vWp.xz * 0.02));
+        vec3 wt0 = texture2D(tWet, wuv * 1.1).rgb; float wl0 = dot(wt0, vec3(0.3, 0.5, 0.2));
+        vec3 wet = vec3(0.16, 0.095, 0.032) * (0.6 + 0.4 * wl0 / 0.19);
         vec3 rock = texture2D(tRock, wuv * 0.6).rgb * vec3(0.62, 0.62, 0.64);
-        vec3 grass = texture2D(tGrass, wuv * 0.45).rgb * vec3(0.85, 1.0, 0.7);
+        vec3 g0 = texture2D(tGrass, wuv * 0.45).rgb; float gl0 = dot(g0, vec3(0.3, 0.5, 0.2));
+        vec3 grass = vec3(0.075, 0.14, 0.035) * (0.5 + 0.5 * gl0 / 0.16) * mix(0.75, 1.15, n1);
+        // further inland the ground is under the kiawe forest: dark, dense canopy colour for the distance
+        vec3 canopy = mix(vec3(0.025, 0.07, 0.02), vec3(0.06, 0.13, 0.035), vn(vWp.xz * 0.08) * 0.6 + vn(vWp.xz * 0.3) * 0.4);
         // wet below the swash line (and on any seabed the sea has exposed), drying out up the beach
         wetK = 1.0 - smoothstep(0.35, 1.1 + n1 * 0.5, vWp.y);
         vec3 sand = mix(dry * mix(0.92, 1.06, n2), wet, wetK);
-        sand = mix(sand, sand * vec3(0.62, 0.66, 0.6), (1.0 - smoothstep(-3.0, -0.8, vWp.y)) * 0.7);     // seabed: darker, algae tint
+        sand = mix(sand, vec3(0.30, 0.25, 0.15) * (0.7 + 0.3 * n2), (1.0 - smoothstep(-2.0, -0.4, vWp.y)) * 0.8);     // seabed: clean pale sand under clear water
+        sand = mix(sand, sand * vec3(0.6, 0.66, 0.62), (1.0 - smoothstep(-14.0, -6.0, vWp.y)) * 0.6);
         float slope = 1.0 - vWn.y;
         rockK = clamp(smoothstep(0.18, 0.42, slope + n1 * 0.12) + smoothstep(0.4, 0.75, ${HEAD_B.toFixed(1)} > 0.0 ? exp(-((vWp.x-${HEAD_X.toFixed(1)})/${(HEAD_W * 0.85).toFixed(1)})*((vWp.x-${HEAD_X.toFixed(1)})/${(HEAD_W * 0.85).toFixed(1)})) * (1.0 - smoothstep(30.0, 90.0, d)) * (0.6 + n1 * 0.6) : 0.0), 0.0, 1.0);
         float grassK = smoothstep(105.0, 150.0, d + n1 * 40.0) * (1.0 - rockK * 0.6);
         vec3 col = mix(sand, grass, grassK);
+        col = mix(col, canopy, smoothstep(0.35, 0.9, vC + (n1 - 0.5) * 0.3) * (1.0 - rockK));
         col = mix(col, rock, rockK);
         diffuseColor.rgb = col;
-      `).replace('#include <roughnessmap_fragment>', `float roughnessFactor = mix(0.95, 0.42, wetK); roughnessFactor = mix(roughnessFactor, 0.88, rockK);`);
+      `).replace('#include <roughnessmap_fragment>', `float roughnessFactor = mix(0.95, 0.68, wetK * (1.0 - smoothstep(0.5, 1.2, vWp.y)) * step(-0.4, vWp.y)) * mix(1.0, 0.9, n2); roughnessFactor = mix(roughnessFactor, 0.88, rockK);`);
     };
     mat.customProgramCacheKey = () => 'l3terr';
     TERR = new THREE.Mesh(g, mat); TERR.receiveShadow = true; scene.add(TERR);
   }
   // ================================================================== sky, light, fog
-  let SKY = null, SUN = null; const SUNDIR = new V3(0.42, 0.58, -0.7).normalize();
+  let SKY = null, SUN = null; const SUNDIR = new V3(0.30, 0.86, -0.42).normalize();   // bright midday
   const SKYGLSL = `
     vec3 skyCol(vec3 d, vec3 sunD){
       float y = d.y, mu = dot(d, sunD);
-      float hz = exp(-max(y, 0.0) * 5.0);
-      vec3 zen = vec3(0.10, 0.30, 0.68), hor = vec3(0.62, 0.74, 0.82);
+      float hz = exp(-max(y, 0.0) * 6.0);
+      vec3 zen = vec3(0.003, 0.03, 0.46), hor = vec3(0.30, 0.50, 0.88);
       vec3 c = mix(zen, hor, hz);
       float g = 0.78, mie = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * mu, 1.5) * 0.010;
       c += vec3(1.0, 0.92, 0.75) * mie;
-      if (y < 0.0) c = mix(hor, vec3(0.2, 0.36, 0.45), clamp(-y * 3.0, 0.0, 1.0));
+      if (y < 0.0) c = mix(hor, vec3(0.10, 0.28, 0.52), clamp(-y * 3.0, 0.0, 1.0));
       return c;
     }`;
   function buildSky() {
@@ -225,19 +235,27 @@ export function createLevel3(C) {
           vec3 d = normalize(vD); vec3 c = skyCol(d, uSun);
           c += vec3(1.0, 0.96, 0.88) * smoothstep(0.9994, 0.9998, dot(d, uSun)) * 8.0;
           // fair-weather cumulus
-          if (d.y > 0.0) { vec2 p = d.xz / (d.y + 0.12) * 1.6 + vec2(uTime * 0.004, 0.0);
-            float n = vn(p) * 0.55 + vn(p * 2.3 + 3.1) * 0.3 + vn(p * 5.1 + 7.7) * 0.15;
-            float cl = smoothstep(0.55, 0.78, n) * smoothstep(0.0, 0.18, d.y) * (1.0 - smoothstep(0.55, 0.9, d.y));
-            vec3 cc = mix(vec3(0.72, 0.76, 0.82), vec3(1.0), smoothstep(0.6, 0.9, n));
-            c = mix(c, cc, cl * 0.85); }
+          if (d.y > 0.0) { vec2 p = d.xz / (d.y + 0.10) * 0.55 + vec2(uTime * 0.002, 0.0);
+            #define CN(q) (vn(q) * 0.46 + vn(q * 2.1 + 3.1) * 0.26 + vn(q * 4.7 + 7.7) * 0.16 + vn(q * 9.8 + 1.3) * 0.12)
+            float n = CN(p);
+            float cov = smoothstep(0.0, 0.06, d.y) * (1.0 - smoothstep(0.45, 0.8, d.y)) * (0.75 + 0.25 * smoothstep(-0.3, 0.6, d.z));
+            float cl = smoothstep(0.52, 0.6, n) * cov * smoothstep(0.08, 0.25, d.y);
+            vec2 sd = normalize(uSun.xz + 1e-4) * 0.05;
+            float ns = CN(p + sd);                        // denser toward the sun = this side is in shadow
+            float lit = clamp(0.55 + (n - ns) * 7.0, 0.0, 1.0);
+            float core = smoothstep(0.62, 0.85, n);
+            vec3 cc = mix(vec3(0.46, 0.52, 0.64), vec3(1.05, 1.04, 1.02), smoothstep(0.15, 0.85, lit)) * mix(1.0, 0.84, core * (1.0 - lit));
+            cc *= 0.86 + 0.22 * vn(p * 16.0 + 2.0) * (0.5 + 0.5 * vn(p * 33.0));   // cauliflower texture
+            cc += vec3(1.0, 0.97, 0.9) * pow(1.0 - smoothstep(0.5, 0.58, n), 2.0) * 0.25 * cl;   // bright silver lining
+            c = mix(c, cc, cl * 0.75); }
           gl_FragColor = vec4(c, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }` }));
     sky.renderOrder = -10; sky.frustumCulled = false; scene.add(sky); SKY = sky;
-    scene.fog = new THREE.FogExp2(0xa9c4d2, 0.00036);
-    scene.add(new THREE.HemisphereLight(0xcfe6ff, 0xb8a27a, 0.95));
-    SUN = new THREE.DirectionalLight(0xfff1d8, 3.0); SUN.position.copy(SUNDIR).multiplyScalar(300);
+    scene.fog = new THREE.FogExp2(0x9dbbe0, 0.00028);
+    scene.add(new THREE.HemisphereLight(0xbcd8ff, 0xc9a86c, 0.9));
+    SUN = new THREE.DirectionalLight(0xfff4e2, 3.3); SUN.position.copy(SUNDIR).multiplyScalar(300);
     SUN.castShadow = true; SUN.shadow.mapSize.set(IS_MOBILE ? 2048 : 4096, IS_MOBILE ? 2048 : 4096);
     const sc = SUN.shadow.camera; sc.left = sc.bottom = -70; sc.right = sc.top = 70; sc.near = 10; sc.far = 800; SUN.shadow.bias = -0.0005; SUN.shadow.normalBias = 0.05;
     scene.add(SUN, SUN.target);
@@ -279,7 +297,7 @@ export function createLevel3(C) {
       // little spilling breakers rolling up the beach
       float d = p.y - zsh(p.x);
       brk = uShore * smoothstep(0.15, 1.2, dep0) * (1.0 - smoothstep(2.5, 9.0, dep0));
-      float sb = 0.28 * pow(0.5 + 0.5 * sin(d * 0.32 + uTime * 1.5), 3.0) * brk;
+      float sb = 0.32 * pow(0.5 + 0.5 * sin(d * 0.105 - uTime * 0.9), 6.0) * brk;
       float h = base + swell(p, att) + sb;
       depth = h - th;
       return h;
@@ -310,6 +328,7 @@ export function createLevel3(C) {
           #include <fog_vertex>
         }`,
       fragmentShader: `uniform float uTime, uWaveH, uSurge; uniform vec3 uSun;
+        ${GLSL_GEO}
         varying vec3 vWp; varying vec3 vN; varying float vDepth, vCrest, vBrk, vSw;
         #include <fog_pars_fragment>
         float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
@@ -323,28 +342,35 @@ export function createLevel3(C) {
           float r1 = vn(q * 0.35 + vec2(uTime * 0.25, uTime * 0.18)), r2 = vn(q * 0.9 - vec2(uTime * 0.31, -uTime * 0.22));
           float r1x = vn(q * 0.35 + vec2(0.7, 0.0) + vec2(uTime * 0.25, uTime * 0.18)), r2x = vn(q * 0.9 + vec2(0.0, 0.5) - vec2(uTime * 0.31, -uTime * 0.22));
           float fade = 1.0 - smoothstep(60.0, 400.0, dist);
-          vec3 N = normalize(vN + vec3((r1x - r1) * 0.9 + (r2x - r2) * 0.5, 0.0, (r1 - r2x) * 0.6 + (r2 - r1x) * 0.4) * fade * 0.55);
+          vec3 N = normalize(vN + vec3((r1x - r1) * 0.9 + (r2x - r2) * 0.5, 0.0, (r1 - r2x) * 0.6 + (r2 - r1x) * 0.4) * fade * 0.32);
           vec3 V = normalize(cameraPosition - vWp);
           float NV = max(dot(N, V), 0.0);
           float F = 0.02 + 0.98 * pow(1.0 - NV, 5.0);
           vec3 R = reflect(-V, N); R.y = abs(R.y);
           vec3 refl = skyCol(R, uSun);
           float spec = pow(max(dot(R, uSun), 0.0), 220.0) * 5.0 + pow(max(dot(R, uSun), 0.0), 18.0) * 0.12;
-          vec3 deep = vec3(0.008, 0.075, 0.15), mid = vec3(0.02, 0.24, 0.32), shallow = vec3(0.10, 0.52, 0.50);
-          vec3 body = mix(shallow, mid, smoothstep(0.4, 4.0, vDepth)); body = mix(body, deep, smoothstep(5.0, 30.0, vDepth));
+          // Maui palette: bright aqua over sand in the shallows -> turquoise -> deep sapphire offshore
+          vec3 deep = vec3(0.002, 0.028, 0.16), mid = vec3(0.003, 0.15, 0.16), shallow = vec3(0.035, 0.40, 0.31);
+          vec3 body = mix(shallow, mid, smoothstep(0.5, 3.0, vDepth)); body = mix(body, deep, smoothstep(4.0, 16.0, vDepth));
+          // sun through clear shallow water: caustic shimmer over the sandy bottom
+          float cau = vn(q * 0.8 + vec2(uTime * 0.6, uTime * 0.4)) * vn(q * 1.3 - vec2(uTime * 0.5, -uTime * 0.3));
+          body += vec3(0.10, 0.16, 0.12) * smoothstep(0.18, 0.45, cau) * (1.0 - smoothstep(0.5, 4.0, vDepth)) * fade;
           body *= 0.85 + 0.35 * clamp(vSw * 0.6, -0.5, 1.0);
           // the tsunami is heavy with sand: turbid, darker green-brown
           float turb = clamp(vCrest / max(uWaveH, 0.01), 0.0, 1.0) * step(0.01, uWaveH) + clamp(uSurge * 0.06, 0.0, 0.7);
           body = mix(body, vec3(0.09, 0.13, 0.10), clamp(turb, 0.0, 0.8));
-          vec3 col = mix(body, refl, F) + vec3(1.0, 0.95, 0.85) * spec;
+          vec3 col = mix(body, refl * vec3(0.55, 0.7, 0.95), F * mix(0.42, 0.34, smoothstep(4.0, 15.0, vDepth))) + vec3(1.0, 0.95, 0.85) * spec;
           // foam: swash line, spilling breakers, tsunami face + churn
           float fn = vn(q * 0.6 + uTime * 0.4) * 0.6 + vn(q * 2.3 - uTime * 0.7) * 0.4;
-          float shore = (1.0 - smoothstep(0.0, 0.45 + fn * 0.35, vDepth));
-          float brk = vBrk * smoothstep(0.55, 0.85, fn + 0.25 * sin(vWp.z * 0.32 + uTime * 1.5));
+          // a thin swash line + a couple of clean shore-break lines rolling in (no busy streaks)
+          float shore = (1.0 - smoothstep(0.0, 0.06 + fn * 0.1, vDepth)) * (0.7 + 0.3 * fn);
+          float dl = vWp.z - zsh(vWp.x);
+          float band = pow(max(0.0, sin(dl * 0.105 - uTime * 0.9)), 22.0) * smoothstep(0.15, 0.55, vn(vec2(vWp.x * 0.025, uTime * 0.05)) * 0.7 + fn * 0.4);
+          float brk = vBrk * smoothstep(0.25, 0.75, band * (0.55 + 0.6 * fn)) * smoothstep(0.25, 0.6, vDepth) * (1.0 - smoothstep(1.4, 2.6, vDepth));
           float tsu = step(0.01, uWaveH) * smoothstep(0.35, 0.8, vCrest / max(uWaveH, 0.01)) * (0.55 + 0.45 * fn);
-          float foam = clamp(max(max(shore * 0.8, brk * 0.55), tsu), 0.0, 1.0);
+          float foam = clamp(max(max(shore * 0.85, brk * 0.95), tsu), 0.0, 1.0);
           col = mix(col, vec3(0.93, 0.95, 0.95), foam);
-          float alpha = clamp(smoothstep(-0.05, 1.6, vDepth) * 0.82 + 0.18 + foam * 0.5 + F * 0.2, 0.0, 1.0);
+          float alpha = clamp(smoothstep(-0.05, 3.5, vDepth) * 0.8 + 0.12 + foam * 0.6 + F * 0.25, 0.0, 1.0);
           gl_FragColor = vec4(col, alpha);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
@@ -421,7 +447,7 @@ export function createLevel3(C) {
     const nutM = new THREE.MeshStandardMaterial({ color: 0x5a4a22, roughness: 0.7 });
     const V = [0, 1, 2, 3].map(i => palmVariant(i + 1));
     const spots = [[], [], [], []];
-    const N = IS_MOBILE ? 300 : 460; let tries = 0;
+    const N = IS_MOBILE ? 90 : 140; let tries = 0;   // Makena: only a few coconut palms among the kiawe
     while (spots.flat().length < N && tries++ < N * 30) {
       const x = TB.x0 + 300 + Math.random() * (TB.x1 - TB.x0 - 500);
       const d = Math.random() < 0.7 ? 60 + Math.pow(Math.random(), 1.5) * 220 : 25 + Math.random() * 60;
@@ -527,6 +553,127 @@ export function createLevel3(C) {
       const pm = new THREE.Mesh(g, NFX.padMat); pm.renderOrder = 2; scene.add(pm);
       const gm = new THREE.Mesh(g, NFX.glowMat); gm.renderOrder = 3; gm.position.y = 0.02; scene.add(gm);
     }
+  }
+  // ================================================================== Makena-style backdrop: kiawe tree line + Haleakala slopes
+  // Dense, low, umbrella-canopied kiawe / tropical trees right behind the sand (instanced), and a hazy green volcanic
+  // massif rising inland, with its own aerial-perspective haze (lighter than the scene fog so it stays readable).
+  let TREES = null, MTN = null;
+  function kiaweGeo(seed) {
+    let sd = seed * 977; const rnd = () => { sd = (sd * 16807) % 2147483647; return (sd - 1) / 2147483646; };
+    const parts = [], c = new THREE.Color();
+    const paint = (g, fn) => { const p = g.attributes.position, n = g.attributes.normal, col = new Float32Array(p.count * 3);
+      for (let i = 0; i < p.count; i++) { fn(c, p.getX(i), p.getY(i), p.getZ(i), n.getY(i)); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3)); if (g.attributes.uv) g.deleteAttribute('uv'); return g; };
+    // crooked trunk + two limbs
+    const H0 = 1.0 + rnd() * 0.7, lean = (rnd() - 0.5) * 0.5;
+    const tr = new THREE.CylinderGeometry(0.16, 0.26, H0, 6, 1); tr.translate(0, H0 / 2, 0); tr.rotateZ(lean * 0.5);
+    parts.push(paint(tr, (c) => c.setRGB(0.16, 0.12, 0.09)));
+    for (let k = 0; k < 2; k++) { const L = 1.8 + rnd(), b = new THREE.CylinderGeometry(0.08, 0.14, L, 5, 1); b.translate(0, L / 2, 0); b.rotateZ((k ? 1 : -1) * (0.6 + rnd() * 0.4)); b.rotateY(rnd() * 6.28); b.translate(lean * H0 * 0.25, H0 * 0.95, 0);
+      parts.push(paint(b, (c) => c.setRGB(0.15, 0.11, 0.08))); }
+    // canopy: a broad, flattened dome of leafy clumps
+    const R = 2.1 + rnd() * 1.3, top = H0 + 2.0 + rnd() * 1.8, nb = IS_MOBILE ? 4 : 5;
+    for (let k = 0; k < nb; k++) {
+      const a = k / nb * 6.28 + rnd() * 0.8, r = k === 0 ? 0 : R * (0.5 + rnd() * 0.45), s = 1.6 + rnd() * 1.0;
+      const g = new THREE.IcosahedronGeometry(1, 1); const p = g.attributes.position;
+      const nr = g.attributes.normal;
+      for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), f = 1 + (fbm(x * 1.7 + seed * 3 + k, y * 1.9 + z * 1.3) - 0.5) * 0.55; p.setXYZ(i, x * f, y * f, z * f); nr.setXYZ(i, x, y, z); }   // smooth (spherical) normals: no facets
+      g.scale(s * 1.2, s * (0.95 + rnd() * 0.4), s * 1.2); g.translate(Math.cos(a) * r, top - (k === 0 ? -0.2 : rnd() * 0.6), Math.sin(a) * r);
+      const sh = 0.8 + rnd() * 0.35;
+      parts.push(paint(g, (c, x, y, z, ny) => { const t = clamp(ny * 0.5 + 0.5, 0, 1); c.setRGB((0.018 + 0.05 * t) * sh, (0.05 + 0.10 * t) * sh, (0.012 + 0.022 * t) * sh); }));
+    }
+    const m = mergeGeometries(parts.map(g => g.index ? g.toNonIndexed() : g)); return m;
+  }
+  function buildTrees() {
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82 });
+    mat.onBeforeCompile = (sh) => {   // leafy break-up: clumps of light/dark foliage in world space + a gentle sway
+      sh.uniforms.uTime = U.uTime;
+      sh.vertexShader = 'uniform float uTime; varying vec3 vLp;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vec4 ip = instanceMatrix[3]; float sw = max(0.0, transformed.y - 2.0) * 0.025; transformed.x += sin(uTime * 1.3 + ip.x * 0.11) * sw; transformed.z += cos(uTime * 1.1 + ip.z * 0.13) * sw;')
+        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vLp = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = 'varying vec3 vLp;\nfloat lh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }\nfloat ln3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(mix(lh(i), lh(i+vec3(1,0,0)), f.x), mix(lh(i+vec3(0,1,0)), lh(i+vec3(1,1,0)), f.x), f.y), mix(mix(lh(i+vec3(0,0,1)), lh(i+vec3(1,0,1)), f.x), mix(lh(i+vec3(0,1,1)), lh(i+vec3(1,1,1)), f.x), f.y), f.z); }\n'
+        + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n { float l = ln3(vLp * 2.6) * 0.6 + ln3(vLp * 7.0) * 0.4; diffuseColor.rgb *= 0.62 + 0.75 * l; }');
+    };
+    mat.customProgramCacheKey = () => 'l3kiawe';
+    const V = [0, 1, 2, 3, 4].map(i => kiaweGeo(i + 1));
+    const spots = V.map(() => []);
+    const N = IS_MOBILE ? 1000 : 1700; let tries = 0;
+    while (spots.flat().length < N && tries++ < N * 40) {
+      const x = TB.x0 + 260 + Math.random() * (TB.x1 - TB.x0 - 360);
+      const d = Math.random() < 0.65 ? 74 + Math.pow(Math.random(), 1.4) * 80 : 150 + Math.pow(Math.random(), 1.3) * 260;
+      const z = zsh(x) + d; if (z > TB.z1 - 20) continue;
+      const h = H(x, z); if (h < 1.6) continue;
+      if (headW(x, d) > 0.3 || !offCourse(x, z, 10)) continue;
+      // a dense wall at the back of the beach, thinning into clumps further in
+      if (d > 140 && fbm(x * 0.013, z * 0.013) < 0.38 && Math.random() < 0.6) continue;
+      spots[Math.floor(Math.random() * V.length)].push([x, h - 0.15, z, Math.random() * 6.28, (d < 160 ? 1.7 : 1.5) + Math.random() * 0.9]);
+    }
+    TREES = [];
+    const mt = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new V3(), ps = new V3(), Y = new V3(0, 1, 0);
+    // chunk by x so the camera frustum culls whole stretches of forest
+    const CH = 260, chunks = new Map();
+    V.forEach((geo, vi) => spots[vi].forEach(e => { const k = vi + ':' + Math.floor(e[0] / CH); if (!chunks.has(k)) chunks.set(k, { geo, arr: [] }); chunks.get(k).arr.push(e); }));
+    chunks.forEach(({ geo, arr }) => {
+      const im = new THREE.InstancedMesh(geo, mat, arr.length);
+      arr.forEach((e, i) => { q.setFromAxisAngle(Y, e[3]); mt.compose(ps.set(e[0], e[1], e[2]), q, sc.set(e[4], e[4] * (0.85 + Math.random() * 0.3), e[4])); im.setMatrixAt(i, mt); });
+      im.castShadow = !IS_MOBILE; im.receiveShadow = false; im.computeBoundingSphere(); scene.add(im); TREES.push(im); });
+    TREES.count = spots.flat().length;
+  }
+  // big fair-weather cumulus: painted billboard clouds on a ring around the camera (puffy tops, grey flat bases)
+  let CLOUDS = null;
+  function cumulusTex(seed) {
+    let sd = seed * 7919; const r = () => { sd = (sd * 16807) % 2147483647; return (sd - 1) / 2147483646; };
+    return canvasTex(512, 256, (g, w, h) => {
+      g.clearRect(0, 0, w, h); const base = h * 0.78;
+      const puffs = []; for (let i = 0; i < 110; i++) { const u = r(), x = w * (0.1 + 0.8 * u), env = Math.sin(Math.PI * u) ** 0.7, y = base - env * h * (0.25 + 0.4 * r()) * r(), rad = (18 + 50 * env * r()) * (y < base - 40 ? 1 : 0.8); puffs.push([x, Math.min(y, base - rad * 0.35), rad]); }
+      for (const [x, y, rad] of puffs) { const gr = g.createRadialGradient(x - rad * 0.25, y - rad * 0.3, rad * 0.1, x, y, rad);
+        gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(0.45, 'rgba(248,250,253,0.8)'); gr.addColorStop(0.8, 'rgba(240,244,250,0.3)'); gr.addColorStop(1, 'rgba(230,236,245,0)'); g.fillStyle = gr; g.beginPath(); g.arc(x, y, rad, 0, Math.PI * 2); g.fill(); }
+      // shade: grey, flat base; sunlit crowns
+      g.globalCompositeOperation = 'source-atop';
+      const sh = g.createLinearGradient(0, h * 0.25, 0, base); sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(0.55, 'rgba(170,182,200,0.25)'); sh.addColorStop(1, 'rgba(118,130,152,0.75)');
+      g.fillStyle = sh; g.fillRect(0, 0, w, h);
+      for (let i = 0; i < 40; i++) { const [x, y, rad] = puffs[(r() * puffs.length) | 0], cx = x + rad * 0.3, cy = y + rad * 0.35, gr = g.createRadialGradient(cx, cy, 0, cx, cy, rad * 0.6); gr.addColorStop(0, 'rgba(120,132,155,0.12)'); gr.addColorStop(1, 'rgba(120,132,155,0)'); g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, rad * 0.6, 0, Math.PI * 2); g.fill(); }
+      g.globalCompositeOperation = 'destination-out'; const cut = g.createLinearGradient(0, base - 6, 0, base + 10); cut.addColorStop(0, 'rgba(0,0,0,0)'); cut.addColorStop(1, 'rgba(0,0,0,1)'); g.fillStyle = cut; g.fillRect(0, base - 6, w, h);
+      g.globalCompositeOperation = 'source-over';
+    });
+  }
+  function buildClouds() {
+    const tx = [1, 2, 3, 4].map(cumulusTex); CLOUDS = new THREE.Group(); let sd = 4242; const r = () => { sd = (sd * 16807) % 2147483647; return (sd - 1) / 2147483646; };
+    for (let i = 0; i < 22; i++) {
+      // mostly over the land (+z) and along the coast, a few out to sea
+      const a = (i < 15 ? (0.12 + 0.76 * r()) * Math.PI : (1.1 + 0.8 * r()) * Math.PI), dist = 3200 + r() * 2600;
+      const m = new THREE.SpriteMaterial({ map: tx[i % 4], transparent: true, depthWrite: false, fog: false, color: 0xffffff });
+      const s = new THREE.Sprite(m); const W = 1500 + r() * 2200; s.scale.set(W, W * 0.5, 1);
+      s.position.set(Math.cos(a) * dist, 380 + r() * 700, Math.sin(a) * dist); s.renderOrder = -5; CLOUDS.add(s);
+    }
+    scene.add(CLOUDS);
+  }
+  // distant volcanic massif (Haleakala's leeward slopes): ridged fbm on a broad cone, gullies, green with dry lower flanks
+  function buildMountains() {
+    const NX = IS_MOBILE ? 260 : 360, NZ = IS_MOBILE ? 60 : 80, X0 = -7500, X1 = 7000, pos = [], col = [], idx = [], c = new THREE.Color();
+    const ridge = (x, z) => { let a = 0, f = 1, w = 0.5; for (let o = 0; o < 4; o++) { a += w * (1 - Math.abs(vnoise(x * f, z * f) * 2 - 1)); f *= 2.1; w *= 0.5; } return a; };
+    for (let j = 0; j <= NZ; j++) for (let i = 0; i <= NX; i++) {
+      const x = X0 + (X1 - X0) * i / NX, inT = sstep(TB.x0 - 300, TB.x0 + 100, x) * (1 - sstep(TB.x1 - 100, TB.x1 + 300, x));
+      const d0 = lerp(140, 680, inT), u = Math.pow(j / NZ, 1.35), d = d0 + u * 8200, z = zsh(x) * (0.4 + 0.6 * inT) + d;
+      const base = H(x, zsh(x) + Math.min(d, 600)) * (d < 700 ? 1 : 1);
+      const dist = Math.hypot(x - 900, d - 8600);
+      const cone = 1700 * Math.exp(-((dist / 5600) ** 1.5)) + 1150 * Math.exp(-((Math.hypot(x + 3600, d - 5200) / 3800) ** 1.6));   // + the coastal range ahead along the beach               // the big shield volcano inland
+      const foot = 220 * sstep(1200, 3200, d) * (0.5 + fbm(x * 0.0006, d * 0.0005));
+      const rg = ridge(x * 0.0011, d * 0.0011);
+      const m = sstep(1300, 4200, d);
+      const h = base + m * (cone * (0.7 + 0.45 * rg) + foot + 160 * rg) + sstep(700, 1600, d) * 60 * fbm(x * 0.003, d * 0.003) - (1 - sstep(0, 150, d - d0)) * 2;
+      pos.push(x, h, z);
+      const gul = clamp((rg - 0.45) * 2.2, 0, 1), dry = sstep(300, 900, h) * (1 - sstep(1100, 1800, h)) * 0.6, top = sstep(1500, 2300, h);
+      c.setRGB(0.04 + 0.05 * dry + 0.02 * top, 0.10 + 0.03 * gul - 0.02 * dry + 0.02 * top, 0.03 + 0.01 * top); col.push(c.r, c.g, c.b);
+    }
+    for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) { const a = j * (NX + 1) + i, b = a + 1, cc = a + NX + 1, dd = cc + 1; idx.push(a, cc, b, b, cc, dd); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.setIndex(idx); g.computeVertexNormals();
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, fog: false });
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uHaze = { value: new THREE.Color(0x9fc0e8) };
+      sh.vertexShader = 'varying vec3 vMw;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vMw = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = 'uniform vec3 uHaze; varying vec3 vMw;\n' + sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n { float dd = length(vMw - cameraPosition); float hz = 1.0 - exp(-dd * 0.00027); hz *= mix(1.0, 0.8, smoothstep(200.0, 1500.0, vMw.y)); gl_FragColor.rgb = mix(gl_FragColor.rgb, uHaze, clamp(hz, 0.0, 0.88)); }');
+    };
+    mat.customProgramCacheKey = () => 'l3mtn';
+    MTN = new THREE.Mesh(g, mat); MTN.frustumCulled = false; MTN.renderOrder = -1; scene.add(MTN);
   }
   // --- tsunami hazard / evacuation signs, siren towers, lifeguard tower, start banner
   function signTex(kind) {
@@ -1004,32 +1151,91 @@ export function createLevel3(C) {
   const fromBoat = (lx, lz) => { const c = Math.cos(BOAT_YAW), s = Math.sin(BOAT_YAW); return [BOAT_P.x + lx * c + lz * s, BOAT_P.z - lx * s + lz * c]; };
   const _l = new V3();
   const fwd = (yaw, o) => o.set(Math.sin(yaw), 0, Math.cos(yaw));   // swim-space yaw: forward = (sin, cos); toward the boat = PI
-  // ---- swimmer (procedural: helmet in team colour, face, jersey, crawl arms, flutter kick)
-  const SKIN = new THREE.MeshStandardMaterial({ color: 0xc89070, roughness: 0.6 });
+  // ---- swimmer: a man in a polo shirt, belt, trousers and dress shoes (David's character); realistic freestyle
+  const SKIN = new THREE.MeshStandardMaterial({ color: 0xd09a7a, roughness: 0.48 });
+  const LOOKS = [ // [shirt, hair, trousers]  — index 0 is the player: cream polo, dark brown hair, dark brown trousers
+    [0xe8dcc0, 0x3a2618, 0x3b2a1f], [0x9cc4e4, 0x16110d, 0x2c3440], [0xf2f2ee, 0x6e4a2a, 0x4a4036], [0xa9b98f, 0x2a1c14, 0x2b2a28],
+    [0x6d7f99, 0x8a6a42, 0x3a3128], [0xd99a86, 0x1c1612, 0x33302c], [0xb8b2a6, 0x5a5550, 0x2e2620]];
+  const SWG = {};
+  function swGeo() {
+    if (SWG.torso) return SWG;
+    // torso: a lathed chest-to-waist profile (broad shoulders, tapering waist), lying along z
+    const prof = [[0.0, 0.0], [0.13, 0.02], [0.17, 0.06], [0.185, 0.14], [0.19, 0.25], [0.18, 0.36], [0.165, 0.45], [0.15, 0.5], [0.0, 0.52]].map(([r, y]) => new THREE.Vector2(r, y));
+    const t = new THREE.LatheGeometry(prof, 18); t.rotateX(Math.PI / 2); t.scale(1.25, 0.72, 1); SWG.torso = t;      // y-up lathe -> along +z, flattened front/back
+    SWG.collar = new THREE.TorusGeometry(0.085, 0.022, 6, 16, Math.PI * 1.6);
+    SWG.sleeve = new THREE.CylinderGeometry(0.068, 0.062, 0.2, 10); SWG.sleeve.translate(0, -0.1, 0);
+    SWG.upper = new THREE.CapsuleGeometry(0.048, 0.22, 3, 8); SWG.upper.translate(0, -0.15, 0);
+    SWG.fore = new THREE.CapsuleGeometry(0.042, 0.22, 3, 8); SWG.fore.translate(0, -0.13, 0);
+    SWG.hand = new THREE.BoxGeometry(0.08, 0.16, 0.03); SWG.hand.translate(0, -0.08, 0);
+    SWG.belt = new THREE.CylinderGeometry(0.168, 0.168, 0.045, 18, 1, true); SWG.belt.rotateX(Math.PI / 2); SWG.belt.scale(1.25, 0.72, 1);
+    SWG.buckle = new THREE.BoxGeometry(0.05, 0.012, 0.04);
+    SWG.hips = new THREE.SphereGeometry(0.17, 14, 10); SWG.hips.scale(1.22, 0.7, 0.8);
+    SWG.thigh = new THREE.CapsuleGeometry(0.075, 0.36, 3, 10); SWG.thigh.translate(0, -0.24, 0);
+    SWG.shin = new THREE.CapsuleGeometry(0.06, 0.38, 3, 10); SWG.shin.translate(0, -0.24, 0);
+    const sh = new THREE.CapsuleGeometry(0.048, 0.17, 3, 8); sh.rotateX(Math.PI / 2); sh.translate(0, 0.0, 0.07); SWG.shoe = sh;
+    SWG.skull = new THREE.SphereGeometry(0.108, 18, 14); SWG.skull.scale(0.92, 1.06, 1.02);
+    SWG.jaw = new THREE.SphereGeometry(0.08, 12, 10); SWG.jaw.scale(0.95, 0.8, 1.0);
+    // hair: a cap over the crown + back, with a swept front quiff
+    const hc = new THREE.SphereGeometry(0.114, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.5); hc.scale(0.95, 0.82, 1.08); SWG.hairCap = hc;
+    const hb = new THREE.SphereGeometry(0.112, 16, 10, Math.PI * 0.62, Math.PI * 0.76, Math.PI * 0.3, Math.PI * 0.42); hb.scale(0.96, 1.05, 1.06); SWG.hairBack = hb;
+    const q = new THREE.SphereGeometry(0.07, 12, 8); q.scale(1.35, 0.55, 0.85); SWG.quiff = q;
+    SWG.nose = new THREE.ConeGeometry(0.018, 0.045, 6); SWG.nose.rotateX(Math.PI / 2);
+    SWG.ear = new THREE.SphereGeometry(0.026, 8, 6); SWG.ear.scale(0.45, 1, 0.8);
+    SWG.eye = new THREE.SphereGeometry(0.012, 8, 6);
+    SWG.brow = new THREE.BoxGeometry(0.035, 0.008, 0.01);
+    SWG.neck = new THREE.CylinderGeometry(0.05, 0.056, 0.12, 10); SWG.neck.rotateX(Math.PI / 2);
+    SWG.btn = new THREE.SphereGeometry(0.008, 6, 4);
+    return SWG;
+  }
   function makeSwimmer(R) {
-    const col = new THREE.Color(R.col), g = new THREE.Group(); g.rotation.order = 'YXZ';
-    const jer = new THREE.MeshStandardMaterial({ color: col.clone().multiplyScalar(0.75), roughness: 0.35 });
-    const hel = new THREE.MeshStandardMaterial({ color: col.clone().lerp(new THREE.Color(0xffffff), 0.15), roughness: 0.25, metalness: 0.2 });
-    const visor = new THREE.MeshStandardMaterial({ color: 0x111317, roughness: 0.1, metalness: 0.6 });
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.62, 4, 10), jer); torso.rotation.x = Math.PI / 2; torso.scale.set(1.12, 1, 0.8); torso.position.set(0, -0.1, 0); g.add(torso);
-    const head = new THREE.Group(); head.position.set(0, 0.17, 0.6); g.add(head);
-    const hm = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12), hel); hm.scale.set(1, 0.95, 1.1); head.add(hm);
-    const vs = new THREE.Mesh(new THREE.SphereGeometry(0.172, 14, 8, -0.9, 1.8, 1.25, 0.6), visor); vs.rotation.y = 0; head.add(vs);
-    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), SKIN); chin.position.set(0, -0.1, 0.07); head.add(chin);
-    const arms = [], legs = [];
+    const G = swGeo(), li = R.player ? 0 : 1 + ((R.num || 0) + (R.name || '').length) % (LOOKS.length - 1), lk = LOOKS[li];
+    // soaked cloth: darker, glossier than dry (the swim is all in the sea)
+    const wet = (c, k) => new THREE.Color(c).multiplyScalar(k);
+    const shirt = new THREE.MeshStandardMaterial({ color: wet(lk[0], 0.8), roughness: 0.5 });
+    const hairM = new THREE.MeshStandardMaterial({ color: wet(lk[1], 0.75), roughness: 0.32 });
+    const pants = new THREE.MeshStandardMaterial({ color: wet(lk[2], 0.82), roughness: 0.55 });
+    const leather = new THREE.MeshStandardMaterial({ color: 0x2e1d12, roughness: 0.38 });
+    const shoeM = new THREE.MeshStandardMaterial({ color: 0x17110d, roughness: 0.25, metalness: 0.1 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xb8a77a, roughness: 0.3, metalness: 0.9 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1c1410, roughness: 0.4 });
+    const M = (geo, mat, p, par) => { const m = new THREE.Mesh(geo, mat); if (p) m.position.set(p[0], p[1], p[2]); (par || g).add(m); return m; };
+    const g = new THREE.Group(); g.rotation.order = 'YXZ';
+    const body = new THREE.Group(); g.add(body);                         // rolls about the long axis
+    M(G.torso, shirt, [0, -0.08, -0.12], body);                          // shirt body: z -0.12 (waist) .. 0.4 (shoulders)
+    const col = M(G.collar, shirt, [0, -0.02, 0.41], body); col.rotation.set(0, 0, -Math.PI * 0.3); col.scale.set(1.2, 0.95, 1.6);
+    const btnM = new THREE.MeshStandardMaterial({ color: 0xf0ece0, roughness: 0.3 }); M(G.btn, btnM, [0, -0.168, 0.37], body); M(G.btn, btnM, [0, -0.17, 0.32], body);
+    M(G.belt, leather, [0, -0.08, -0.1], body); M(G.buckle, metal, [0, -0.205, -0.1], body);
+    M(G.hips, pants, [0, -0.08, -0.2], body);
+    M(G.neck, SKIN, [0, -0.03, 0.47], body);
+    // head: tilted face-down/forward like a real crawl; rolls to the side to breathe
+    const head = new THREE.Group(); head.position.set(0, -0.0, 0.52); body.add(head);
+    const hd = new THREE.Group(); hd.position.set(0, 0.0, 0.1); hd.rotation.x = 0.55; head.add(hd);   // face points +z, tilted down
+    M(G.skull, SKIN, [0, 0.02, 0], hd); M(G.jaw, SKIN, [0, -0.06, 0.03], hd);
+    M(G.hairCap, hairM, [0, 0.035, -0.005], hd); M(G.hairBack, hairM, [0, 0.0, 0], hd);
+    const qf = M(G.quiff, hairM, [0.012, 0.1, 0.06], hd); qf.rotation.set(-0.35, 0.25, 0.12);
+    M(G.nose, SKIN, [0, -0.005, 0.115], hd);
+    for (const sd of [-1, 1]) { M(G.ear, SKIN, [sd * 0.1, 0.0, -0.005], hd); M(G.eye, dark, [sd * 0.036, 0.02, 0.098], hd); const br = M(G.brow, hairM, [sd * 0.037, 0.045, 0.1], hd); br.rotation.z = sd * -0.12; }
+    const arms = [], elb = [], legs = [], knees = [];
     for (const sd of [-1, 1]) {
-      const sh = new THREE.Group(); sh.position.set(sd * 0.27, -0.06, 0.36); g.add(sh);
-      const up = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, 0.3, 3, 8), jer); up.position.y = -0.2; sh.add(up);
-      const fo = new THREE.Mesh(new THREE.CapsuleGeometry(0.052, 0.3, 3, 8), SKIN); fo.position.y = -0.52; sh.add(fo);
-      arms.push(sh);
-      const hip = new THREE.Group(); hip.position.set(sd * 0.11, -0.2, -0.42); g.add(hip);
-      const lg = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.7, 3, 8), new THREE.MeshStandardMaterial({ color: 0x23262c, roughness: 0.7 })); lg.rotation.x = Math.PI / 2; lg.position.z = -0.42; hip.add(lg);
-      legs.push(hip);
+      const shd = new THREE.Group(); shd.position.set(sd * 0.25, -0.06, 0.36); body.add(shd);
+      M(G.sleeve, shirt, [0, 0, 0], shd); M(G.upper, SKIN, [0, -0.03, 0], shd);
+      const e = new THREE.Group(); e.position.set(0, -0.3, 0); shd.add(e);
+      M(G.fore, SKIN, [0, 0, 0], e); const hn = M(G.hand, SKIN, [0, -0.26, 0], e); hn.rotation.y = sd * 0.25;
+      arms.push(shd); elb.push(e);
+      const hip = new THREE.Group(); hip.position.set(sd * 0.1, -0.08, -0.24); hip.rotation.x = 0; body.add(hip);
+      // leg segments hang along -y in their groups; the hip group turns them to trail behind (-z)
+      const hl = new THREE.Group(); hl.rotation.x = Math.PI / 2; hip.add(hl);
+      M(G.thigh, pants, [0, 0, 0], hl);
+      const kn = new THREE.Group(); kn.position.set(0, -0.48, 0); hl.add(kn);
+      M(G.shin, pants, [0, 0, 0], kn);
+      const ft = new THREE.Group(); ft.position.set(0, -0.5, 0); kn.add(ft); const shoe = M(G.shoe, shoeM, [0, 0, 0], ft); shoe.rotation.x = Math.PI / 2 - 0.25;
+      legs.push(hip); knees.push(kn);
     }
-    g.traverse(o => { if (o.isMesh) o.castShadow = false; });
+    g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
     const tag = nameTag(R); tag.position.set(0, 1.25, 0); g.add(tag);
+    g.scale.setScalar(1.3);   // a touch larger than life so he reads on a phone screen
     g.visible = false; scene.add(g);
-    return { g, arms, legs, head, tag };
+    return { g, body, arms, elb, legs, knees, head, tag };
   }
   function nameTag(R) {
     const tex = canvasTex(256, 64, (c, w, h) => { c.fillStyle = 'rgba(0,0,0,0.45)'; c.beginPath(); c.roundRect ? c.roundRect(4, 6, w - 8, h - 12, 14) : c.rect(4, 6, w - 8, h - 12); c.fill();
@@ -1037,11 +1243,21 @@ export function createLevel3(C) {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true, fog: false })); s.scale.set(2.2, 0.55, 1); s.renderOrder = 6; return s;
   }
   function poseSwimmer(W, dt) {
-    const m = W.m; m.g.position.set(W.x, W.y, W.z); m.g.rotation.set(-0.08 + W.dive * 0.55, W.yaw, Math.sin(W.ph) * 0.22);
-    m.arms[0].rotation.x = -Math.PI / 2 + W.ph; m.arms[1].rotation.x = -Math.PI / 2 + W.ph + Math.PI;
-    W.kick = (W.kick || 0) + dt * (4 + W.v * 3);
-    m.legs[0].rotation.x = Math.sin(W.kick) * 0.28; m.legs[1].rotation.x = -Math.sin(W.kick) * 0.28;
-    m.head.rotation.y = Math.sin(W.ph) * 0.5;
+    const m = W.m, ph = W.ph; m.g.position.set(W.x, W.y, W.z); m.g.rotation.set(-0.06 + W.dive * 0.55, W.yaw, 0);
+    // freestyle: shoulders circle (pull under the body, high-elbow recovery over the water), body rolls toward the pulling arm
+    m.body.rotation.z = Math.sin(ph) * 0.42;
+    for (let k = 0; k < 2; k++) { const a = ph + k * Math.PI, aw = ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);   // 0: reaching forward, pi/2: pulled to the hip, pi: overhead
+      // aw: 0 reach forward -> pi/2 pull under the chest -> pi exit at the hip -> 3pi/2 over the water -> 2pi entry
+      // recovery (arm out of the water, pi..2pi): swung out to the side, elbow high and bent, hand trailing
+      const recE = aw > Math.PI ? Math.sin(aw - Math.PI) : 0;
+      m.arms[k].rotation.set(-Math.PI / 2 + aw, 0, (k ? 1 : -1) * (0.1 * Math.sin(aw) + 0.75 * recE));
+      const pull = aw <= Math.PI ? Math.sin(aw) * 0.5 : 0;
+      m.elb[k].rotation.x = -(pull + recE * 1.55); }
+    // flutter kick from the hips, knees soft
+    W.kick = (W.kick || 0) + dt * (5 + W.v * 1.1);
+    for (let k = 0; k < 2; k++) { const s = Math.sin(W.kick + k * Math.PI); m.legs[k].rotation.x = s * 0.26; m.knees[k].rotation.x = -(0.15 + 0.25 * Math.max(0, -s)); }
+    // breathing: every cycle the head turns with the roll to one side
+    m.head.rotation.z = Math.pow(Math.max(0, Math.sin(ph)), 3) * 0.9; m.head.rotation.x = -0.05;
     m.tag.visible = !W.player && !W.ko && camera.position.distanceTo(m.g.position) < 140;
   }
   // ---- shark (lofted body, counter-shaded, fins, lunate tail, hinged jaw; vertex-bend swim)
@@ -1236,7 +1452,7 @@ export function createLevel3(C) {
     setRaceVisible(false); setSwimVisible(true); NFX.speedLines(0);
     const L = LADDER();
     let maxZ = L.z;
-    SW.forEach((W, i) => { const R = W.R, hs = SWS.start[i];
+    SW.forEach((W, i) => { const R = W.R, hs = swimDist(SWS.start[i]);
       const lat = W.player ? 0 : [-14, 12, -24, 22, -6, 7][(i - 1) % 6] + (Math.random() - 0.5) * 4;
       Object.assign(W, { x: L.x + lat, z: L.z + hs, yaw: Math.PI, v: 0, hp: 3, ko: false, koT: 0, dive: 0, diving: false, breath: 1, cd: 0, ph: Math.random() * 6, lastTap: -9, streak: 0, done: false, doneT: 0, climb: 0, rise: 1, react: null, skill: 0.85 + Math.random() * 0.25, wob: Math.random() * 6, bites: 0 });
       W.y = -2; W.slot = null; W.push = null; W.sHeld = false; maxZ = Math.max(maxZ, W.z); W.m.g.visible = true; W.m.g.rotation.set(0, 0, 0); });
@@ -1251,6 +1467,8 @@ export function createLevel3(C) {
   }
   // ---- player swimming
   const _w = new V3();
+  const SWK = 2.5;
+  function swimDist(hs) { return 380 + (hs - 160) * 1.5; }   // beach head start (160-420) -> swim to the boat (380-770 m)   // swim speed scale (v2: 2.5x the original crawl)
   function swimInput(W, dt) {
     const steer = ((keys.KeyD || keys.ArrowRight) ? 1 : 0) - ((keys.KeyA || keys.ArrowLeft) ? 1 : 0);
     const stroke = !!(keys.Space || keys.KeyW || keys.ArrowUp), dive = !!(keys.ShiftLeft || keys.ShiftRight || keys.KeyS || keys.ArrowDown || keys.KeyC);
@@ -1258,8 +1476,8 @@ export function createLevel3(C) {
     // strokes: every press is one stroke; a steady ~0.45-0.8 s rhythm is fastest, button-mashing is sloppy
     if (stroke && !W.sHeld) { W.sHeld = true; const iv = SWS.t - W.lastTap;
       if (iv >= 0.3) { let dv; if (iv >= 0.42 && iv <= 0.82) { W.streak = Math.min(6, W.streak + 1); dv = 0.95 + W.streak * 0.035; W.rhythm = 1; } else { W.streak = 0; dv = iv < 0.42 ? 0.42 : 0.7; W.rhythm = iv < 0.42 ? -1 : 0; }
-        W.v += dv * (W.diving ? 0.6 : 1) * (W.hp === 1 ? 0.85 : 1); W.lastTap = SWS.t; W.phT = Math.PI; strokeSnd(); ui.rh.className = 'r' + (W.rhythm + 1); setTimeout(() => { ui.rh.className = ''; }, 180); } }
-    if (!stroke) { W.sHeld = false; W.held = 0; } else { W.held = (W.held || 0) + dt; if (W.held > 0.9) W.v = Math.max(W.v, 0.9); }   // holding = slow paddle
+        W.v += dv * SWK * (W.diving ? 0.6 : 1) * (W.hp === 1 ? 0.85 : 1); W.lastTap = SWS.t; W.phT = Math.PI; strokeSnd(); ui.rh.className = 'r' + (W.rhythm + 1); setTimeout(() => { ui.rh.className = ''; }, 180); } }
+    if (!stroke) { W.sHeld = false; W.held = 0; } else { W.held = (W.held || 0) + dt; if (W.held > 0.5) W.v = Math.max(W.v, 1.0 * SWK); }   // holding = slow paddle
     if (SWS.t - W.lastTap > 1.4) W.streak = 0;
     // dive: up to 2.4 s under, then a breath; short cooldown
     if (dive && !W.diving && W.cd <= 0 && W.breath > 0.3) { W.diving = true; SWS.dives++; splashSnd(0.25); }
@@ -1269,7 +1487,7 @@ export function createLevel3(C) {
     W.cd = Math.max(0, W.cd - dt);
     if (W.diving) W.breath = Math.max(0, W.breath - dt / 2.4); else W.breath = Math.min(1, W.breath + dt / 3.2);
     W.dive += ((W.diving ? 1 : 0) - W.dive) * Math.min(1, 5 * dt);
-    W.v *= Math.exp(-0.8 * dt); W.v = Math.min(W.v, 3.6);
+    W.v *= Math.exp(-0.85 * dt); W.v = Math.min(W.v, 3.6 * SWK);
     if (W.ko) W.v *= Math.exp(-2 * dt);
     fwd(W.yaw, _w); W.x += _w.x * W.v * dt; W.z += _w.z * W.v * dt;
     if (W.push) { W.x += W.push.x * dt; W.z += W.push.z * dt; W.push.multiplyScalar(Math.exp(-3 * dt)); }
@@ -1278,13 +1496,13 @@ export function createLevel3(C) {
       if (!W.player && !(W.avoidT > 0)) { fwd(W.yaw, _w); W.avoidT = 1.6; W.avoidSd = (_w.x * dz - _w.z * dx) > 0 ? -1 : 1; } } }
     { let [lx, lz] = toBoat(W.x, W.z); if (Math.abs(lx) < 2.3 && lz > -6.4 && lz < 7) { const px = 2.3 - Math.abs(lx), pz = lz + 6.4; if (px < pz) lx = Math.sign(lx || 1) * 2.3; else lz = -6.4; [W.x, W.z] = fromBoat(lx, lz); } }
     // stroke animation: arm phase advances with each stroke (W.phT) or slowly while paddling
-    const target = W.v * 2.2 + (W.phT || 0) * 6; W.phT = Math.max(0, (W.phT || 0) - dt * 6);
+    const target = W.v * 2.2 / SWK * 1.25 + (W.phT || 0) * 6; W.phT = Math.max(0, (W.phT || 0) - dt * 6);
     W.ph += Math.min(target, 9) * dt + 0.6 * dt;
     W.rise = Math.max(0, W.rise - dt * 1.4);
-    const wl = waterHJ(W.x, W.z); W.y = wl - 0.2 - W.dive * 2.4 - W.rise * 2 - (W.ko ? Math.min(3, W.koT * 0.4) : 0);
+    const wl = waterHJ(W.x, W.z); W.y = wl - 0.05 - W.dive * 2.4 - W.rise * 2 - (W.ko ? Math.min(3, W.koT * 0.4) : 0);
     if (W.ko) W.koT += dt;
     poseSwimmer(W, dt);
-    if (W.v > 1.2 && W.dive < 0.2 && Math.random() < 0.25 && camera.position.distanceTo(W.m.g.position) < 50) emit(W.x + (Math.random() - 0.5) * 0.6, wl + 0.1, W.z + (Math.random() - 0.5) * 0.6, (Math.random() - 0.5), 1 + Math.random(), (Math.random() - 0.5), 0.5, 0.35, 0.95, 0.97, 1, 0.7, 6, 0.8, 2);
+    if (W.v > 1.2 * SWK && W.dive < 0.2 && Math.random() < 0.25 && camera.position.distanceTo(W.m.g.position) < 50) emit(W.x + (Math.random() - 0.5) * 0.6, wl + 0.1, W.z + (Math.random() - 0.5) * 0.6, (Math.random() - 0.5), 1 + Math.random(), (Math.random() - 0.5), 0.5, 0.35, 0.95, 0.97, 1, 0.7, 6, 0.8, 2);
   }
   // ---- AI swimmers: head for the ladder, react to a locked-on shark (dive or sprint sideways)
   function swimAI(W, dt, i) {
@@ -1297,7 +1515,7 @@ export function createLevel3(C) {
     W.aiT = (W.aiT || 0) - dt;
     const base = (1.98 + 0.12 * (i % 3)) * W.skill * (W.hp === 1 ? 0.85 : 1) * (W.react && W.react.k === 'dodge' ? 1.35 : 1);
     const P = SW[0], Lp = Math.hypot(P.x - L.x, P.z - L.z), rb = P.done ? 1 : clamp(1 + (dist - Lp) * 0.002, 0.92, 1.1);
-    if (W.aiT <= 0) { W.aiT = 0.56 + Math.random() * 0.1; W.v += base * 0.5 * rb; W.phT = Math.PI; }
+    if (W.aiT <= 0) { W.aiT = 0.56 + Math.random() * 0.1; W.v += base * 0.5 * rb * SWK; W.phT = Math.PI; }
     if (W.react) { W.react.t -= dt; if (W.react.k === 'dive' && W.react.t < 0.45 && W.react.t > -0.8) { if (!W.diving) { W.diving = true; } } else if (W.diving && W.react.t <= -0.8) { W.diving = false; W.cd = 1; }
       if (W.react.t < -1.2) { W.react = null; W.diving = false; } }
     if (dist < 2.6) finishSwimmer(W);
@@ -1320,6 +1538,7 @@ export function createLevel3(C) {
     m.g.rotation.x = -Math.PI / 2 * Math.max(up, on);
     m.arms[0].rotation.x = -Math.PI * 0.95 + Math.sin(SWS.t * 6) * 0.4 * (1 - on); m.arms[1].rotation.x = -Math.PI * 0.95 - Math.sin(SWS.t * 6) * 0.4 * (1 - on);
     m.legs[0].rotation.x = Math.sin(SWS.t * 6) * 0.4 * (1 - on); m.legs[1].rotation.x = -Math.sin(SWS.t * 6) * 0.4 * (1 - on);
+    m.body.rotation.z = 0; m.head.rotation.set(0, 0, 0); m.elb[0].rotation.x = m.elb[1].rotation.x = -0.35 * (1 - on); m.knees[0].rotation.x = m.knees[1].rotation.x = -0.4 * Math.abs(Math.sin(SWS.t * 6)) * (1 - on);
     m.tag.visible = false;
   }
   // ---- sharks: roam (fins circling) -> stalk -> lock-on (warning) -> lunge -> bite / miss -> retreat
@@ -1346,26 +1565,26 @@ export function createLevel3(C) {
     if (S.st === 'roam') {
       // circle the pack: centre drifts to a swimmer, radius 25-55 m
       const al = targetsAlive(); const c = al.length ? al[(SHARKS.indexOf(S)) % al.length] : SW[0];
-      S.cx += (c.x - S.cx) * Math.min(1, dt * 0.2); S.cz += (c.z - 12 - S.cz) * Math.min(1, dt * 0.2);
+      S.cx += (c.x - S.cx) * Math.min(1, dt * 0.6); S.cz += (c.z - 18 - S.cz) * Math.min(1, dt * 0.6);
       const a = Math.atan2(S.x - S.cx, S.z - S.cz) + S.dir * 0.35;
-      steerTo(S, S.cx + Math.sin(a) * S.cr, S.cz + Math.cos(a) * S.cr, 0.9, dt); S.v += (3.4 - S.v) * Math.min(1, dt); S.depth += (0.55 - S.depth) * Math.min(1, dt);
+      steerTo(S, S.cx + Math.sin(a) * S.cr, S.cz + Math.cos(a) * S.cr, 0.9, dt); S.v += (7.8 - S.v) * Math.min(1, dt); S.depth += (0.55 - S.depth) * Math.min(1, dt);
     } else if (S.st === 'stalk') {
       if (!T || T.ko || T.done) return sharkRetreat(S);
       // close in on a shrinking ring around the target
       S.ang += dt * 0.5 * S.dir; const r = lerp(24, 11.5, clamp(S.t / 3, 0, 1));
       const tx = T.x + Math.sin(S.ang) * r, tz = T.z + Math.cos(S.ang) * r;
-      steerTo(S, tx, tz, 1.7, dt); S.v += (6.2 - S.v) * Math.min(1, dt * 1.5); S.depth += (0.45 - S.depth) * Math.min(1, dt * 2);
+      steerTo(S, tx, tz, 1.7, dt); S.v += (Math.max(10.5, T.v + 4) - S.v) * Math.min(1, dt * 1.5); S.depth += (0.45 - S.depth) * Math.min(1, dt * 2);
       if (S.t > 2.4 && Math.hypot(S.x - T.x, S.z - T.z) < 15) { S.st = 'lock'; S.t = 0; if (T.player) lockWarn(S, true); else aiReact(T, S); }
     } else if (S.st === 'lock') {
       if (!T || T.ko || T.done) { if (T && T.player) lockWarn(S, false); return sharkRetreat(S); }
       // slows, swings round to aim, fin high and steady (1.5 s of warning)
-      steerTo(S, T.x, T.z, 2.2, dt); S.v += (1.6 - S.v) * Math.min(1, dt * 3); S.depth += (0.32 - S.depth) * Math.min(1, dt * 3);
+      steerTo(S, T.x, T.z, 2.2, dt); S.v += (T.v * 0.95 + 1.2 - S.v) * Math.min(1, dt * 3); S.depth += (0.32 - S.depth) * Math.min(1, dt * 3);
       const d = Math.hypot(S.x - T.x, S.z - T.z); if (d < 8) { S.x -= Math.sin(S.yaw) * (8 - d) * dt * 2; S.z -= Math.cos(S.yaw) * (8 - d) * dt * 2; }
       if (S.t > 1.5) { S.st = 'lunge'; S.t = 0; fwd(T.yaw, _s); const lead = 0.45 * T.v;
-        const ax = T.x + _s.x * lead - S.x, az = T.z + _s.z * lead - S.z, l = Math.hypot(ax, az) || 1; S.ldx = ax / l; S.ldz = az / l; S.yaw = Math.atan2(S.ldx, S.ldz); S.l0 = l; S.trav = 0; S.minD = 1e9; S.bit = false; S.v = 13;
+        const ax = T.x + _s.x * lead - S.x, az = T.z + _s.z * lead - S.z, l = Math.hypot(ax, az) || 1; S.ldx = ax / l; S.ldz = az / l; S.yaw = Math.atan2(S.ldx, S.ldz); S.l0 = l; S.trav = 0; S.minD = 1e9; S.bit = false; S.v = 19;
         if (T.player) lungeSnd(); }
     } else if (S.st === 'lunge') {
-      S.v = 13; S.depth += (0.05 - S.depth) * Math.min(1, dt * 8); S.jaw = Math.min(1, S.jaw + dt * 5);
+      S.v = 19; S.depth += (0.05 - S.depth) * Math.min(1, dt * 8); S.jaw = Math.min(1, S.jaw + dt * 5);
       const hx = S.x + S.ldx * 1.75 * S.sc, hz = S.z + S.ldz * 1.75 * S.sc, d = Math.hypot(hx - T.x, hz - T.z);
       S.minD = Math.min(S.minD, d);
       if (!S.bit && d < 1.45 && T.dive < 0.45 && !T.ko && !T.done) { S.bit = true; bite(S, T); }
@@ -1382,7 +1601,7 @@ export function createLevel3(C) {
       S.v *= Math.exp(-4 * dt); S.jaw = 0.4 + 0.6 * Math.abs(Math.sin(S.t * 14)); S.yaw += Math.sin(S.t * 22) * dt * 4;
       if (S.t > 0.7) { if (T && T.player) lockWarn(S, false); sharkRetreat(S); }
     } else if (S.st === 'retreat') {
-      S.v += (7 - S.v) * Math.min(1, dt * 2); S.depth += (0.9 - S.depth) * Math.min(1, dt); S.jaw = Math.max(0, S.jaw - dt * 3);
+      S.v += (10 - S.v) * Math.min(1, dt * 2); S.depth += (0.9 - S.depth) * Math.min(1, dt); S.jaw = Math.max(0, S.jaw - dt * 3);
       if (S.t > 3.2) { S.st = 'roam'; S.t = 0; S.tgt = null; S.cr = 25 + Math.random() * 30; }
     }
     if (S.st !== 'lunge' && S.st !== 'bite') S.jaw = Math.max(0, S.jaw - dt * 2);
@@ -1437,11 +1656,11 @@ export function createLevel3(C) {
     let S0 = null; for (const S of SHARKS) if (S.tgt === W && (S.st === 'lock' || S.st === 'lunge' || S.st === 'bite')) S0 = S;
     SWS.camW = (SWS.camW || 0) + ((S0 ? 1 : 0) - (SWS.camW || 0)) * Math.min(1, dt * 2.5);
     if (S0) { SWS.camSx = S0.x; SWS.camSz = S0.z; }
-    const cw = SWS.camW, k = camFit(58), kk = 1 + (k.k - 1) * 0.4, back = 4.7 * kk * (1 + cw * 0.5), up = 1.95 * kk * (1 + cw * 0.35) + W.dive * 0.4;
+    const cw = SWS.camW, k = camFit(52 + cw * 8), kk = 1 + (k.k - 1) * 0.4, back = 2.7 * kk * (1 + cw * 1.4), up = 1.5 * kk * (1 + cw * 0.9) + W.dive * 0.4;
     _b.set(W.x - _w.x * back, 0, W.z - _w.z * back); _b.y = Math.max(waterHJ(_b.x, _b.z) + 1.2, waterHJ(W.x, W.z) + up);
-    if (snap || camShot !== 6) { camShot = 6; camP.copy(_b); } else camP.lerp(_b, 1 - Math.exp(-4 * dt));
+    if (snap || camShot !== 6) { camShot = 6; camP.copy(_b); } else camP.lerp(_b, 1 - Math.exp(-10 * dt));
     camera.position.copy(camP); shake(dt);
-    camL.set(W.x + _w.x * 9, waterHJ(W.x, W.z) + 0.6, W.z + _w.z * 9);
+    camL.set(W.x + _w.x * 2.4, waterHJ(W.x, W.z) - 0.05, W.z + _w.z * 2.4);
     if (cw > 0.01 && SWS.camSx !== undefined) { camL.x += ((W.x + SWS.camSx) * 0.5 - camL.x) * cw * 0.7; camL.z += ((W.z + SWS.camSz) * 0.5 - camL.z) * cw * 0.7; }
     camera.lookAt(camL);
     camera.fov += (k.fov - camera.fov) * Math.min(1, 3 * dt); camera.updateProjectionMatrix();
@@ -1672,7 +1891,7 @@ export function createLevel3(C) {
     const R0 = RACERS[0];
     ui.res.innerHTML = '<h1>' + (me === 1 ? 'FIRST ABOARD — YOU SURVIVED THE TSUNAMI!' : 'RESCUED · P' + me) + '</h1><p>' +
       all.map((W, i) => (i + 1) + '. ' + (W.player ? '<b>45 YOU</b>' : W.R.num + ' ' + W.R.name) + (W.done ? ' — aboard ' + W.doneT.toFixed(1) + 's' : W.ko ? ' — KO (shark)' : ' — still swimming, ' + Math.round(Math.hypot(W.x - L.x, W.z - L.z)) + ' m')).join('<br>') +
-      '</p><p class="st">Height when the wave hit <b>' + (R0.sweepH || 0).toFixed(0) + ' m</b> → head start, swim <b>' + Math.round(SWS.start[0]) + ' m</b><br>Sharks dodged <b>' + SWS.dodged + '</b> · bites <b>' + SWS.bites + '</b> · dives <b>' + SWS.dives + '</b>' + (SWS.retries ? ' · retries <b>' + SWS.retries + '</b>' : '') + '<br>Beach ' + raceT.toFixed(1) + 's + swim ' + swimT.toFixed(1) + 's</p>' +
+      '</p><p class="st">Height when the wave hit <b>' + (R0.sweepH || 0).toFixed(0) + ' m</b> → head start, swim <b>' + Math.round(swimDist(SWS.start[0])) + ' m</b><br>Sharks dodged <b>' + SWS.dodged + '</b> · bites <b>' + SWS.bites + '</b> · dives <b>' + SWS.dives + '</b>' + (SWS.retries ? ' · retries <b>' + SWS.retries + '</b>' : '') + '<br>Beach ' + raceT.toFixed(1) + 's + swim ' + swimT.toFixed(1) + 's</p>' +
       '<div><button id="l3swimAgain">SWIM AGAIN</button><button id="l3again">RACE AGAIN</button><button id="l3back">LEVEL SELECT</button></div>';
     ui.res.style.display = 'flex';
     $('l3swimAgain').onclick = () => { showResults.marked = false; retrySwim(); };
@@ -1688,7 +1907,7 @@ export function createLevel3(C) {
     try {
       if (!built) {
         buildCourse(); buildDeck(); buildJumpData(); buildHeightmap();
-        buildSky(); buildTerrain(); buildWater(); buildWave(); buildPalms(); buildGrass(); buildRocks(); buildBoardwalk(); buildJumps(); buildSigns(); buildBirds();
+        buildSky(); buildTerrain(); buildWater(); buildWave(); buildPalms(); buildTrees(); buildMountains(); buildClouds(); buildGrass(); buildRocks(); buildBoardwalk(); buildJumps(); buildSigns(); buildBirds();
         BIRDS.B.forEach(b => { b.home = b.p.clone(); });
         buildParticles(); buildBoat(); buildDebris();
         built = true;
@@ -1745,6 +1964,7 @@ export function createLevel3(C) {
     if (WATER) { const sn = 8; WATER.position.set(Math.round(camera.position.x / sn) * sn, 0, Math.round(camera.position.z / sn) * sn); }
     if (WAVE) WAVE.material.uniforms.uCX.value = camera.position.x;
     if (SKY) SKY.position.copy(camera.position);
+    if (CLOUDS) CLOUDS.position.set(camera.position.x, 0, camera.position.z);
     if (SUN) { const tgt = (phase === 'race' || phase === 'wave' || phase === 'countdown') ? _d.set(PL.x, PL.y, PL.z) : _d.copy(camera.position); SUN.target.position.copy(tgt); SUN.position.copy(SUNDIR).multiplyScalar(300).add(tgt); }
   }
   return { start, stop, update, scene,
