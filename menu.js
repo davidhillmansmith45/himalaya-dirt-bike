@@ -26,7 +26,7 @@
       desc: 'Fly in by Apache and race on top of the Great Wall: gap jumps, tabletops, watchtowers, nitro pads — and zombies climbing the walls.',
       need: 'Complete the Dragon War to unlock' },
     { id: 'l3', n: 'LEVEL 3', name: 'Tsunami', sub: 'Pacific coast', img: 'assets/menu/l3.jpg',
-      desc: 'Beach race on wet and soft sand, dunes and boardwalk — until the sea pulls back. Outrun the tsunami to high ground, then swim for the rescue boat through ten sharks.',
+      desc: 'Beach race on wet and soft sand, dunes and boardwalk — until the sea pulls back. Outrun the tsunami to high ground, then race jet skis to the rescue boat through ten sharks.',
       need: 'Finish the Great Wall race to unlock' },
   ];
   const css = `

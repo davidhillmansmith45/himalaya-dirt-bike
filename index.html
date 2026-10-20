@@ -78,7 +78,7 @@ button#go:active{transform:translateY(1px)}
     <div class="credit">Imja Valley, Khumbu (Nepal) from real elevation data. Terrain: SRTM via AWS Terrain Tiles. Snow/rock tint: Sentinel-2 cloudless 2024 by EOX IT Services GmbH (CC BY-NC-SA 4.0), contains modified Copernicus Sentinel data 2024. Boulder + dirt scans: Poly Haven (CC0). Rider body: MakeHuman/MPFB via Innerscene (CC0). Wolf growl: newagesoup / Freesound (CC BY 3.0); dog snarls: Lisa Redfern / SoundBible (public domain).</div>
   </div>
 </div>
-<script src="menu.js?v=2"></script>
+<script src="menu.js?v=3"></script>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}
 </script>
@@ -5179,7 +5179,7 @@ function startLevel3(opts) {
   if (L3loading) return L3loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l3] eg stop', e); }
   try { if (L2 && L2.active && L2.stop) L2.stop(); } catch (e) { console.warn('[l3] l2 stop', e); }
-  L3loading = import('./level3.js?v=3').then(mod => {
+  L3loading = import('./level3.js?v=4').then(mod => {
     L3 = mod.createLevel3({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L3 = L3;
@@ -5205,7 +5205,7 @@ window.__launchDragonWar = () => {
   if (qp.get('level') === '2') {
     const tm = setInterval(() => { if (aiReady && bike && bike.userData.isGlb && RIDER) { clearInterval(tm); terrainReady.then(() => startLevel2({ skip: qp.get('l2') })); } }, 250);
   }
-  // ?level=3 (intro), ?level=3&l3=race (straight to the grid), ?level=3&l3=swim (straight into the ocean)
+  // ?level=3 (intro), ?level=3&l3=race (straight to the grid), ?level=3&l3=ski (straight onto the jet skis; l3=swim still works)
   if (qp.get('level') === '3') {
     const tm = setInterval(() => { if (aiReady && bike && bike.userData.isGlb && RIDER) { clearInterval(tm); terrainReady.then(() => startLevel3({ skip: qp.get('l3') })); } }, 250);
   }
