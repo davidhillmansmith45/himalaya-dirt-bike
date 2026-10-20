@@ -261,6 +261,100 @@ export function createLevel3(C) {
     scene.add(SUN, SUN.target);
     if (C.envTex) { scene.environment = C.envTex; scene.environmentIntensity = 0.55; }
   }
+  // ================================================================== MX-style sand track (Level 1 look, Makena sand)
+  // A ribbon over the beach following the course: packed racing line with wandering tyre ruts, churned loose
+  // sand toward the edges, windrow berms of ploughed sand along both borders, marker stakes. Visual only:
+  // it sits on the same ground() the riders use, the windrows lie outside the ride limits.
+  let TRACK = null;
+  function buildTrack() {
+    const m = mats(), EW = 4.5, NA = IS_MOBILE ? 22 : 30, pos = [], uvs = [], trk = [], idx = [], hole = [];
+    const f = { ..._f }, rows = D.n;
+    for (let r = 0; r < rows; r++) {
+      const s = r * D.ds; frame(s, f); const lo = latMin(s) - 0.5, hi = latMax(s) + 0.5, bw = bwH(s) > 0.02;
+      hole.push(bw);
+      for (let k = 0; k <= NA; k++) {
+        const u = k / NA, l = lerp(lo - EW, hi + EW, u), x = f.x + f.rx * l, z = f.z + f.rz * l;
+        const out = l < lo ? (lo - l) / EW : l > hi ? (l - hi) / EW : 0;
+        const wind = out > 0 ? Math.sin(Math.min(1, out * 1.25) * Math.PI) * 1.1 * (0.8 + 0.2 * Math.sin(s * 0.11 + k)) : 0;
+        const y = (out > 0 ? H(x, z) : ground(x, z, s)) + 0.07 + wind;
+        pos.push(x, y, z); uvs.push(x / 9, z / 9); trk.push(l - (lo + hi) / 2, s, out, (hi - lo) / 2);
+      }
+    }
+    for (let r = 0; r < rows - 1; r++) { if (hole[r] || hole[r + 1]) continue; for (let k = 0; k < NA; k++) { const a = r * (NA + 1) + k, b = a + 1, c = a + NA + 1, d = c + 1; idx.push(a, c, b, b, c, d); } }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    g.setAttribute('aTrk', new THREE.Float32BufferAttribute(trk, 4)); g.setIndex(idx); g.computeVertexNormals();
+    { const n = g.attributes.normal; let flip = 0; for (let i = 0; i < Math.min(n.count, 200); i++) flip += n.getY(i); if (flip < 0) { for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; } g.setIndex(idx); g.computeVertexNormals(); } }
+    const mat = new THREE.MeshStandardMaterial({ map: m.tDry, normalMap: m.nSand, normalScale: new THREE.Vector2(1, 1), roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+    mat.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, { tWet: { value: m.tWet } });
+      sh.vertexShader = 'attribute vec4 aTrk; varying vec4 vTrk; varying vec3 vWp2;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvTrk = aTrk; vWp2 = (modelMatrix * vec4(transformed,1.0)).xyz;');
+      sh.fragmentShader = 'uniform sampler2D tWet; varying vec4 vTrk; varying vec3 vWp2; vec3 gN;\n' + `
+        float th21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+        float tvn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f); return mix(mix(th21(i), th21(i+vec2(1,0)), u.x), mix(th21(i+vec2(0,1)), th21(i+vec2(1,1)), u.x), u.y); }
+      ` + sh.fragmentShader.replace('#include <map_fragment>', `
+        float lat = vTrk.x, s = vTrk.y, otk = vTrk.z, hw = vTrk.w;
+        vec2 wuv = vWp2.xz / 9.0;
+        float n1 = tvn(vWp2.xz * 0.045), n2 = tvn(vWp2.xz * 0.21 + 7.0), mid = tvn(vWp2.xz * 0.15 + 3.0) - 0.5;
+        vec3 dt0 = texture2D(map, wuv * 0.8).rgb; float dl0 = dot(dt0, vec3(0.3, 0.5, 0.2));
+        vec3 dry = vec3(0.43, 0.27, 0.095) * (0.55 + 0.45 * dl0 / 0.245);
+        vec3 wt0 = texture2D(tWet, wuv * 1.6).rgb; float wl0 = dot(wt0, vec3(0.3, 0.5, 0.2));
+        float wetK = 1.0 - smoothstep(0.35, 1.3 + n1 * 0.5, vWp2.y);
+        // pkc racing line: rider-compacted, slightly damp and darker; lse churned sand toward the borders
+        vec3 pkc = mix(dry * 0.62, vec3(0.20, 0.12, 0.045) * (0.6 + 0.4 * wl0 / 0.19), 0.45 + 0.45 * wetK);
+        vec3 lse = dry * vec3(1.06, 1.04, 1.0) * mix(0.9, 1.12, n2);
+        float lk = smoothstep(hw * 0.45, hw * 0.85, abs(lat) + mid * 5.0);
+        lk = max(lk, step(0.001, otk));
+        // tyre ruts wandering along the racing line
+        float rutH = 0.0, rutD = 0.0, lipC = 0.0;
+        for (int i = 0; i < 9; i++) {
+          float fi = float(i);
+          float c = (-0.62 + fi * 0.155) * hw + sin(s * 0.023 + fi * 1.9) * 1.4 + sin(s * 0.071 + fi * 4.1) * 0.4;
+          float wd = 0.18 + 0.06 * sin(s * 0.05 + fi * 1.3);
+          float dep = 0.05 * (0.5 + 0.5 * sin(s * 0.013 + fi * 2.3));
+          float dd = (lat - c) / wd, gg = exp(-dd * dd);
+          rutH -= dep * gg; rutD += dep * gg * 2.0 * dd / wd;
+          float e = abs(dd) - 1.7; lipC += exp(-e * e * 2.5) * dep * 14.0;
+        }
+        float rk = 1.0 - lk * 0.75; rutH *= rk; rutD *= rk; lipC *= rk;
+        float rutG = clamp(-rutH / 0.05, 0.0, 1.0);
+        // cross-hatched knobby tread prints in the rut floors
+        float tread = step(0.55, fract(s * 2.6 + lat * 0.4)) * rutG;
+        vec3 col = mix(pkc, lse, lk);
+        col *= 0.82 + 0.36 * n1;
+        col *= 1.0 - 0.32 * rutG + 0.06 * tread;
+        col = mix(col, col * 0.62, rutG * 0.4 * wetK);
+        col *= 1.0 + 0.16 * clamp(lipC, 0.0, 1.0);
+        // borders: ploughed windrow, bright dry sand on top with a darker trodden toe line at the track edge
+        float toe = exp(-pow((otk - 0.06) / 0.05, 2.0)) * step(0.0001, otk);
+        col = mix(col, dry * 1.12 * mix(0.88, 1.1, n2), smoothstep(0.1, 0.5, otk) * (1.0 - smoothstep(0.85, 1.0, otk) * 0.5));
+        col *= 1.0 - 0.25 * toe;
+        // blend the far side of the windrow back into the beach
+        diffuseColor.rgb = col;
+        diffuseColor.a = 1.0;
+        gN = vec3(-rutD * vec2(1.0, 0.0) * 1.2, 1.0);
+      `).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = normalize(normal + tbn * vec3(gN.xy, 0.0));`)
+        .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.97, 0.78, (1.0 - lk) * (0.4 + 0.6 * wetK));');
+    };
+    mat.customProgramCacheKey = () => 'l3track';
+    // chunked for frustum culling
+    TRACK = new THREE.Group(); const RPC = 120, nc = NA + 1, A = g.attributes;
+    for (let r0 = 0; r0 < rows - 1; r0 += RPC) {
+      const r1 = Math.min(rows - 1, r0 + RPC), v0 = r0 * nc, v1 = (r1 + 1) * nc, cg = new THREE.BufferGeometry();
+      for (const [name, at] of Object.entries(A)) cg.setAttribute(name, new THREE.BufferAttribute(at.array.slice(v0 * at.itemSize, v1 * at.itemSize), at.itemSize));
+      const ci = []; for (let i = 0; i < idx.length; i += 3) { const a = idx[i]; if (a >= v0 && a < r1 * nc) ci.push(idx[i] - v0, idx[i + 1] - v0, idx[i + 2] - v0); }
+      if (!ci.length) continue; cg.setIndex(ci); cg.computeBoundingSphere();
+      const ms = new THREE.Mesh(cg, mat); ms.receiveShadow = true; TRACK.add(ms);
+    }
+    scene.add(TRACK);
+    // orange / white marker stakes along both borders
+    const sg = new THREE.CylinderGeometry(0.05, 0.06, 1.2, 6); sg.translate(0, 0.6, 0);
+    const smat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+    const pts = []; for (let s = 10; s < D.len - 5; s += 14) { if (bwH(s) > 0.02) continue; frame(s, f); for (const l of [latMin(s) - 1.0, latMax(s) + 1.0]) { const x = f.x + f.rx * l, z = f.z + f.rz * l; pts.push([x, H(x, z) + 0.05, z]); } }
+    const im = new THREE.InstancedMesh(sg, smat, pts.length), mm = new THREE.Matrix4();
+    pts.forEach((p, i) => { mm.makeTranslation(p[0], p[1], p[2]); im.setMatrixAt(i, mm); im.setColorAt(i, new THREE.Color((i >> 1) % 2 ? 0xffffff : 0xff6a12)); });
+    im.castShadow = true; scene.add(im); TRACK.userData.stakes = im;
+  }
   // ================================================================== ocean
   // One camera-following radial grid (dense under the camera), height = swell (depth-attenuated) + sea-level
   // drawdown before the tsunami + the tsunami crest / surge. Depth comes from the terrain heightmap, so the
@@ -276,7 +370,7 @@ export function createLevel3(C) {
       float dd = d - uFront;
       // on land the bore floods whatever it reaches: level never drops below terrain + uBore behind the front
       float tb = uBore > 0.0 ? terrH(p) + uBore : 0.0;
-      crest = max(uWaveH, tb) * tsuK(dd) * 0.8;   // the dedicated face mesh (buildWave) carries the real crest
+      crest = max(min(uWaveH, 40.0), tb) * tsuK(dd) * 0.8;   // the dedicated face mesh (buildWave) carries the real crest
       float surge = max(uSurge, tb * step(0.01, uSurge)) * (1.0 - smoothstep(-110.0, 12.0, dd));
       return lv + max(crest, surge);
     }
@@ -357,8 +451,8 @@ export function createLevel3(C) {
           body += vec3(0.10, 0.16, 0.12) * smoothstep(0.18, 0.45, cau) * (1.0 - smoothstep(0.5, 4.0, vDepth)) * fade;
           body *= 0.85 + 0.35 * clamp(vSw * 0.6, -0.5, 1.0);
           // the tsunami is heavy with sand: turbid, darker green-brown
-          float turb = clamp(vCrest / max(uWaveH, 0.01), 0.0, 1.0) * step(0.01, uWaveH) + clamp(uSurge * 0.06, 0.0, 0.7);
-          body = mix(body, vec3(0.09, 0.13, 0.10), clamp(turb, 0.0, 0.8));
+          float turb = clamp(vCrest / max(min(uWaveH, 40.0), 0.01), 0.0, 1.0) * step(0.01, uWaveH) + clamp(uSurge * 0.06, 0.0, 0.7);
+          body = mix(body, vec3(0.03, 0.20, 0.24), clamp(turb, 0.0, 0.8));
           vec3 col = mix(body, refl * vec3(0.55, 0.7, 0.95), F * mix(0.42, 0.34, smoothstep(4.0, 15.0, vDepth))) + vec3(1.0, 0.95, 0.85) * spec;
           // foam: swash line, spilling breakers, tsunami face + churn
           float fn = vn(q * 0.6 + uTime * 0.4) * 0.6 + vn(q * 2.3 - uTime * 0.7) * 0.4;
@@ -367,7 +461,7 @@ export function createLevel3(C) {
           float dl = vWp.z - zsh(vWp.x);
           float band = pow(max(0.0, sin(dl * 0.105 - uTime * 0.9)), 22.0) * smoothstep(0.15, 0.55, vn(vec2(vWp.x * 0.025, uTime * 0.05)) * 0.7 + fn * 0.4);
           float brk = vBrk * smoothstep(0.25, 0.75, band * (0.55 + 0.6 * fn)) * smoothstep(0.25, 0.6, vDepth) * (1.0 - smoothstep(1.4, 2.6, vDepth));
-          float tsu = step(0.01, uWaveH) * smoothstep(0.35, 0.8, vCrest / max(uWaveH, 0.01)) * (0.55 + 0.45 * fn);
+          float tsu = step(0.01, uWaveH) * smoothstep(0.35, 0.8, vCrest / max(min(uWaveH, 40.0), 0.01)) * (0.55 + 0.45 * fn);
           float foam = clamp(max(max(shore * 0.85, brk * 0.95), tsu), 0.0, 1.0);
           col = mix(col, vec3(0.93, 0.95, 0.95), foam);
           float alpha = clamp(smoothstep(-0.05, 3.5, vDepth) * 0.8 + 0.12 + foam * 0.6 + F * 0.25, 0.0, 1.0);
@@ -384,7 +478,7 @@ export function createLevel3(C) {
     const d = z - zsh(x); let lv = -U.uRecede.value * (1 - sstep(-950, -380, d));
     const dd = d - U.uFront.value, k = dd > 0 ? Math.exp(-dd * dd / 40) : Math.exp(-dd * dd / 6000);
     const tb = U.uBore.value > 0 ? terrHJ(x, z) + U.uBore.value : 0;
-    const crest = Math.max(U.uWaveH.value, tb) * k, surge = Math.max(U.uSurge.value, U.uSurge.value > 0.01 ? tb : 0) * sstep(12, -110, dd);
+    const crest = Math.max(Math.min(U.uWaveH.value, 40), tb) * k, surge = Math.max(U.uSurge.value, U.uSurge.value > 0.01 ? tb : 0) * sstep(12, -110, dd);
     return lv + Math.max(crest, surge);
   }
   function waterHJ(x, z) {
@@ -963,7 +1057,43 @@ export function createLevel3(C) {
   // slightly curling cross-section: no aliasing even when it is still a kilometre out on the horizon.
   // Its back slope sits just above the ocean grid's broad hump / surge so the two blend into one body of water.
   let WAVE = null;
-  const WPROF = [[16, -0.6], [11.5, 0.22], [8.5, 0.5], [6.2, 0.74], [4.6, 0.9], [4.2, 0.99], [5.6, 1.05], [7.4, 1.03], [6.0, 1.08], [2.5, 1.1], [-4, 1.03], [-14, 0.93], [-32, 0.83], [-64, 0.79], [-110, 0.77], [-160, 0.45], [-230, 0.15], [-300, -0.25]];
+  const WPROF = [[22, -0.6], [15, 0.2], [10.5, 0.46], [7.5, 0.68], [6.0, 0.82], [6.4, 0.92], [9.0, 0.99], [13.5, 1.03], [16.0, 1.0], [14.0, 0.95], [10.0, 1.04], [3.0, 1.1], [-4, 1.03], [-14, 0.93], [-32, 0.83], [-64, 0.79], [-110, 0.77], [-160, 0.45], [-230, 0.15], [-300, -0.25]];
+  // billowing white spray blown up and back off the lip: a translucent noise-masked sheet riding the crest
+  function buildSpray(uni) {
+    const NX = IS_MOBILE ? 120 : 200, NY = 7, pos = [], idx = [];
+    for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) pos.push(-1700 + 3400 * i / NX, j / NY, 0);
+    for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) { const a = j * (NX + 1) + i, b = a + 1, c = a + NX + 1, d = c + 1; idx.push(a, b, c, b, d, c); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+    const mat = new THREE.ShaderMaterial({ uniforms: uni, transparent: true, depthWrite: false, fog: true, side: THREE.DoubleSide,
+      vertexShader: `uniform float uTime, uFront, uWaveH, uCX; varying vec2 vUv; varying vec3 vWp;
+        ` + WATER_GLSL.match(/float zsh[^}]*}/)[0] + `
+        #include <fog_pars_vertex>
+        void main(){
+          float x = floor(uCX / 20.0) * 20.0 + position.x, v = position.y;
+          float sec = (sin(x * 0.021 - uTime * 0.6) * 0.5 + 0.5) * (sin(x * 0.083 + uTime * 1.3) * 0.4 + 0.6);
+          float hl = uWaveH, puff = 0.45 + 0.45 * sec + 0.08 * sin(x * 0.05 + uTime * 0.8);
+          float z = zsh(x) + uFront + 8.0 - v * hl * (0.15 + 0.5 * puff) + v * v * hl * 0.05;
+          vec3 wp = vec3(x, hl * (0.98 + v * puff), z);
+          vUv = vec2(x, v); vWp = wp;
+          vec4 mvPosition = viewMatrix * vec4(wp, 1.0); gl_Position = projectionMatrix * mvPosition;
+          #include <fog_vertex>
+        }`,
+      fragmentShader: `uniform float uTime; varying vec2 vUv; varying vec3 vWp;
+        #include <fog_pars_fragment>
+        float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+        float vn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f); return mix(mix(h21(i), h21(i+vec2(1,0)), u.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), u.x), u.y); }
+        void main(){
+          vec2 p = vec2(vUv.x * 0.03, vUv.y * 2.2 - uTime * 0.25);
+          float n = vn(p) * 0.5 + vn(p * 2.3 + 1.7) * 0.3 + vn(p * 5.1 + 4.1) * 0.2;
+          float a = smoothstep(0.2, 0.6, n + 0.75 - vUv.y * 1.0) * smoothstep(0.0, 0.12, vUv.y + 0.05);
+          vec3 c = mix(vec3(0.86, 0.92, 0.94), vec3(1.0), n);
+          gl_FragColor = vec4(c, a * 0.92);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          #include <fog_fragment>
+        }` });
+    const m = new THREE.Mesh(g, mat); m.frustumCulled = false; m.renderOrder = 3; return m;
+  }
   function buildWave() {
     const NX = IS_MOBILE ? 240 : 320, NP = WPROF.length, pos = [], idx = [];
     for (let j = 0; j < NP; j++) for (let i = 0; i <= NX; i++) pos.push(-1700 + 3400 * i / NX, WPROF[j][1], WPROF[j][0]);
@@ -988,7 +1118,7 @@ export function createLevel3(C) {
           float lump = (sin(x * 0.045 + uTime * 0.9) * 0.5 + sin(x * 0.13 - uTime * 1.7) * 0.3 + sin(x * 0.31 + uTime * 2.3) * 0.15) * smoothstep(0.7, 1.05, k) * 0.07;
           float sec = (sin(x * 0.021 - uTime * 0.6) * 0.5 + 0.5) * (sin(x * 0.083 + uTime * 1.3) * 0.4 + 0.6);           // crest height varies along the front
           float lipk = smoothstep(0.98, 1.08, k) * step(0.0, position.z);
-          z += lipk * (2.5 + 3.5 * sec + 1.2 * sin(uTime * 1.9 + x * 0.05)) * clamp(hl / 30.0, 0.3, 1.2);           // the lip pitches forward
+          z += lipk * (2.5 + 3.5 * sec + 1.2 * sin(uTime * 1.9 + x * 0.05)) * clamp(hl / 30.0, 0.3, 2.6);           // the lip pitches forward
           float back = (1.0 - step(0.0, position.z)) * smoothstep(0.6, 0.95, k);
           float chop = back * (sin(x * 0.17 + position.z * 0.21 - uTime * 2.1) * sin(x * 0.07 - position.z * 0.13 + uTime * 1.4)) * 0.025;  // churning back with secondary waves
           vec3 wp = vec3(x, lv + (k * (0.88 + 0.16 * sec) + lump + chop) * hl + 0.35, z);
@@ -1012,19 +1142,18 @@ export function createLevel3(C) {
           vec3 T = normalize(vec3(1.0, 0.0, 0.0)), B = normalize(cross(N, T)); N = normalize(N + (T * (hx - h0) + B * (hy - h0)) * 1.6);
           float n1 = vn(vec2(vWp.x * 0.21, vWp.y * 0.05 + uTime * 0.45)) * 0.65 + vn(vec2(vWp.x * 0.6, vWp.y * 0.14 + uTime * 1.1)) * 0.35, n2 = vn(vWp.xz * 0.25 + uTime * 0.5);
           float face = smoothstep(0.0, 1.0, vDd) * step(vK, 1.0);
-          // body: churned sediment — dark grey-green with brown silt toward the base
-          vec3 body = mix(vec3(0.05, 0.055, 0.042), vec3(0.10, 0.10, 0.075), n2) * (0.6 + 0.4 * smoothstep(0.0, 1.0, vK));
-          body = mix(body, vec3(0.13, 0.10, 0.06), (1.0 - smoothstep(0.05, 0.7, vK)) * (0.55 + 0.35 * n1));
-          // sun through the thin lip: murky olive-green glow, strongest looking toward the light
-          float thin = smoothstep(0.8, 1.0, vK) * face;
-          float bl = pow(max(dot(-V, uSun) * 0.5 + 0.5, 0.0), 3.0) * 0.8 + 0.35;
-          body += vec3(0.07, 0.13, 0.07) * thin * bl * (0.5 + 0.6 * n1);
-          // suspended debris specks
-          float sp = smoothstep(0.82, 0.9, vn(vWp.xy * vec2(0.9, 0.7) + vec2(0.0, uTime * 1.2))) * (1.0 - smoothstep(0.85, 1.0, vK));
-          body = mix(body, vec3(0.05, 0.035, 0.02), sp * 0.8);
+          // body: deep translucent teal at the base, lighter turquoise toward the crest, vertical light streaks
+          float hk = smoothstep(0.0, 1.0, vK);
+          vec3 body = mix(vec3(0.008, 0.06, 0.09), vec3(0.04, 0.24, 0.29), hk) * (0.85 + 0.3 * n2);
+          float vs = vn(vec2(vWp.x * 0.09 + n2 * 2.0, vWp.y * 0.012)) * 0.6 + vn(vec2(vWp.x * 0.33, vWp.y * 0.03 + uTime * 0.3)) * 0.4;
+          body *= 0.82 + 0.4 * vs;
+          // sun through the thin upper face / lip: glowing aqua
+          float thin = smoothstep(0.72, 1.02, vK) * face;
+          float bl = pow(max(dot(-V, uSun) * 0.5 + 0.5, 0.0), 2.0) * 0.6 + 0.55;
+          body += vec3(0.05, 0.22, 0.23) * thin * bl * (0.6 + 0.5 * n1);
           float F = 0.03 + 0.97 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
           vec3 R = reflect(-V, N); R.y = abs(R.y);
-          vec3 col = mix(body, skyCol(R, uSun) * 0.4, F * 0.3) + pow(max(dot(R, uSun), 0.0), 40.0) * 0.3;
+          vec3 col = mix(body, skyCol(R, uSun) * 0.55, F * 0.35) + pow(max(dot(R, uSun), 0.0), 40.0) * 0.35;
           // foam: torn lip, long streaks pouring down the face, boiling base, churning back — dirty, not clean white
           float lip = smoothstep(0.95, 1.06, vK) * (0.6 + 0.4 * n1);
           float wx = vWp.x + (n2 - 0.5) * 18.0 + (n1 - 0.5) * 9.0;
@@ -1032,15 +1161,15 @@ export function createLevel3(C) {
           float streak = smoothstep(0.66, 0.85, st + 0.3 * (vK - 0.75)) * face * (0.4 + 0.6 * n2);
           float base = (1.0 - smoothstep(-0.25, 0.22, vK)) * (0.55 + 0.45 * n2);
           float back = (1.0 - face) * smoothstep(0.55, 0.85, n2 + 0.25 * n1);
-          float foam = clamp(max(max(lip, streak * 0.5), max(base, back * 0.55)) + vLand * (0.2 + 0.35 * n1), 0.0, 1.0);
-          vec3 fc = mix(vec3(0.80, 0.80, 0.74), vec3(0.55, 0.50, 0.40), clamp(0.35 + vLand * 0.5 + (1.0 - vK) * 0.4, 0.0, 1.0) * n2);
-          col = mix(col, fc * (0.55 + 0.45 * max(dot(N, uSun), 0.0)), foam);
+          float foam = clamp(max(max(lip, streak * 0.18), max(base, back * 0.7)) + vLand * (0.2 + 0.35 * n1), 0.0, 1.0);
+          vec3 fc = mix(vec3(0.97, 0.98, 0.98), vec3(0.72, 0.80, 0.80), clamp(0.15 + vLand * 0.5 + (1.0 - vK) * 0.3, 0.0, 1.0) * n2);
+          col = mix(col, fc * (0.78 + 0.3 * max(dot(N, uSun), 0.0)), foam);
           gl_FragColor = vec4(col, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
           #include <fog_fragment>
         }` });
-    WAVE = new THREE.Mesh(g, mat); WAVE.frustumCulled = false; WAVE.visible = false; WAVE.renderOrder = 2; scene.add(WAVE); buildWaveDebris();
+    WAVE = new THREE.Mesh(g, mat); WAVE.frustumCulled = false; WAVE.visible = false; WAVE.renderOrder = 2; scene.add(WAVE); WAVE.add(buildSpray(uni)); buildWaveDebris();
   }
 
   // ---- debris carried in the wave: planks, palm fronds, beach umbrellas, surfboards, tumbling in the face and the flood behind it
@@ -1094,8 +1223,9 @@ export function createLevel3(C) {
   }
   function waveUniforms(t) {
     U.uFront.value = frontAt(t);
-    U.uWaveH.value = 24 + 16 * Math.pow(sstep(0, WAVE_T_SHORE, t), 1.2);
-    U.uSurge.value = U.uWaveH.value * 0.72 * sstep(WAVE_T_SHORE - 3, WAVE_T_SHORE + 1, t);
+    const k = Math.pow(sstep(0, WAVE_T_SHORE, t), 1.2);
+    U.uWaveH.value = 100 + 30 * k;
+    U.uSurge.value = (24 + 16 * k) * 0.72 * sstep(WAVE_T_SHORE - 3, WAVE_T_SHORE + 1, t);
     U.uBore.value = 7 * sstep(WAVE_T_SHORE - 0.5, WAVE_T_SHORE + 1.5, t);
     U.uRecede.value = 3.8 * (1 - sstep(WAVE_T_SHORE - 2, WAVE_T_SHORE, t));
   }
@@ -1108,7 +1238,7 @@ export function createLevel3(C) {
     sweepCheck();
     // mist off the lip near the camera
     if (front > -700) { const n = IS_MOBILE ? 3 : 6; for (let k = 0; k < n; k++) { const x = camera.position.x + (Math.random() - 0.5) * 260, zf = zsh(x) + front + 5; if (Math.hypot(x - camera.position.x, zf - camera.position.z) < 30) continue;
-      const lv = U.uWaveH.value; emit(x, lv * (0.95 + Math.random() * 0.2), zf + Math.random() * 4, (Math.random() - 0.5) * 3, 4 + Math.random() * 6, -(8 + Math.random() * 10), 2.2, 7 + Math.random() * 7, 0.82, 0.84, 0.8, 0.5, 1.2, 0.35, 2.8);
+      const lv = U.uWaveH.value; emit(x, lv * (1.0 + Math.random() * 0.15), zf + 6 + Math.random() * 8, (Math.random() - 0.5) * 3, 6 + Math.random() * 8, -(10 + Math.random() * 12), 2.6, 12 + Math.random() * 12, 0.96, 0.98, 0.98, 0.6, 1.0, 0.35, 2.6);
         if (Math.random() < 0.5) emit(x, lv * 0.3 * Math.random(), zf + 8 + Math.random() * 6, (Math.random() - 0.5) * 4, 2 + Math.random() * 4, 4 + Math.random() * 6, 1.8, 6 + Math.random() * 5, 0.7, 0.68, 0.6, 0.45, 2, 0.5, 2.2); } }
     updateWaveDebris(dt);
     roarLevel(clamp(1 - Math.abs(front - dOf(PL.x, PL.z)) / 900, 0.05, 1));
@@ -2063,7 +2193,7 @@ export function createLevel3(C) {
     try {
       if (!built) {
         buildCourse(); buildDeck(); buildJumpData(); buildHeightmap();
-        buildSky(); buildTerrain(); buildWater(); buildWave(); buildPalms(); buildTrees(); buildMountains(); buildClouds(); buildGrass(); buildRocks(); buildBoardwalk(); buildJumps(); buildSigns(); buildBirds();
+        buildSky(); buildTerrain(); buildTrack(); buildWater(); buildWave(); buildPalms(); buildTrees(); buildMountains(); buildClouds(); buildGrass(); buildRocks(); buildBoardwalk(); buildJumps(); buildSigns(); buildBirds();
         BIRDS.B.forEach(b => { b.home = b.p.clone(); });
         buildParticles(); buildBoat(); buildDebris();
         built = true;
