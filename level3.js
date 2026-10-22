@@ -4,6 +4,8 @@
 // (lock-on, lunge, dive/dodge, 3 bites = knocked out) to a rescue boat. Self-contained scene, procedural +
 // Poly Haven CC0 textures, all audio synthesised (quiet, through the game's master bus / mute).
 import { createNitroFx } from './nitro.js?v=1';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 export function createLevel3(C) {
   const { THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries } = C;
@@ -1598,6 +1600,7 @@ export function createLevel3(C) {
   }
   // look: { shirt, hair, pants, vest? (life-jacket colour), cap? }
   function makeStandMan(look) {
+    if (RM.ready) return makeRealMan(look);
     const G = stGeo();
     const shirt = new THREE.MeshStandardMaterial({ color: look.shirt, roughness: 0.62 });
     const hairM = new THREE.MeshStandardMaterial({ color: look.hair, roughness: 0.45 });
@@ -1645,6 +1648,7 @@ export function createLevel3(C) {
   }
   // natural standing animation. mode: 'idle' | 'cheer' | 'wave'; t seconds; ph per-man phase offset
   function poseStandMan(m, t, mode, k) {
+    if (m.real) return poseRealMan(m, t, mode, k == null ? 1 : k);
     k = k == null ? 1 : k;
     const br = Math.sin(t * 1.6), sw = Math.sin(t * 0.55);
     // weight shift onto one leg: hips sway + roll, standing knee straight, other knee soft; feet stay planted (hip roll compensated)
@@ -1667,9 +1671,150 @@ export function createLevel3(C) {
     m.arms[1].rotation.set(-0.25 * k, 0, (0.09 + 2.35 * k)); m.elb[1].rotation.set(0, 0, 0); m.elb[1].rotation.x = -0.25 * k; m.elb[1].rotation.z = (-0.55 + wv * 0.45) * k;
     m.chest.rotation.z -= 0.04 * k; m.head.rotation.z += 0.05 * k;
   }
+
+  // ---- REAL rigged human (Quaternius Universal Base Characters, CC0) + Universal Animation Library clips (CC0).
+  // Clothing (cream polo, leather belt, dark trousers, dress shoes) is painted onto the skinned body in the shader
+  // from bind-pose bone regions, so it deforms exactly with the skeleton. Cheer / wave are layered on the arm bones
+  // over the mocap idle (AnimationMixer, crossfaded idle <-> talking-idle).
+  const RM = { ready: false, p: null };
+  function loadRealMan() {
+    if (RM.p) return RM.p;
+    const gl = new GLTFLoader(), ld = (u) => new Promise((res) => gl.load(u, res, undefined, (e) => { console.warn('[l3] man', u, e); res(null); }));
+    RM.p = Promise.all([ld('./assets/l3/man/man.glb?v=1'), ld('./assets/l3/man/hair.glb?v=1'), ld('./assets/l3/man/anims.glb?v=1')]).then(([m, h, a]) => {
+      if (!m || !a) return; try { prepRealMan(m, h, a); RM.ready = true; } catch (e) { console.warn('[l3] man prep', e); } });
+    TEXP.push(RM.p); return RM.p;
+  }
+  function prepRealMan(m, h, a) {
+    const root = m.scene; root.updateMatrixWorld(true);
+    root.traverse(o => { if (o.isMesh && o.material && /Hair/.test(o.material.name)) { o.material.alphaTest = 0.5; o.material.transparent = false; } if (o.isMesh && /Eye/.test(o.material.name)) { o.material.color.setScalar(0.55); o.material.roughness = 0.15; } });
+    let body = null; root.traverse(o => { if (o.isSkinnedMesh) { o.frustumCulled = false; o.castShadow = true; if (!body || o.geometry.attributes.position.count > body.geometry.attributes.position.count) body = o; } });
+    const box = new THREE.Box3().setFromObject(body); const ht = box.max.y - box.min.y;
+    const bones = {}; body.skeleton.bones.forEach(b => { bones[b.name] = b; });
+    const bw = (n) => bones[n].getWorldPosition(new V3());
+    const yP = bw('pelvis').y, yS1 = bw('spine_01').y, yNeck = bw('neck_01').y;
+    const waist = yP + (yS1 - yP) * 0.4, beltH = ht * 0.028;
+    const sh = [bw('upperarm_l'), bw('upperarm_r')], el = [bw('lowerarm_l'), bw('lowerarm_r')];
+    // per-vertex cloth weights: x shirt, y trousers, z shoes, w belt  (skin = the rest)
+    const SB = [new THREE.Box3(), new THREE.Box3()];
+    const G = body.geometry, P = G.attributes.position, SI = G.attributes.skinIndex, SW = G.attributes.skinWeight, N = P.count;
+    const GC = [P.getX, P.getY, P.getZ, P.getW], cw = new Float32Array(N * 4), v = new V3(), names = body.skeleton.bones.map(b => b.name);
+    for (let i = 0; i < N; i++) {
+      v.fromBufferAttribute(P, i).applyMatrix4(body.matrixWorld);
+      let arm = 0, foot = 0, leg = 0, head = 0;
+      for (let k = 0; k < 4; k++) { const n = names[GC[k].call(SI, i)], w = GC[k].call(SW, i);
+        if (/hand|lowerarm|thumb|index|middle|ring|pinky/.test(n)) arm += w; else if (/foot|ball/.test(n)) foot += w; else if (/thigh|calf/.test(n)) leg += w; else if (/Head|neck/.test(n)) head += w; else if (/upperarm/.test(n)) {
+          const s = sh[n.endsWith('_l') ? 0 : 1], e = el[n.endsWith('_l') ? 0 : 1]; const u = v.clone().sub(s).dot(e.clone().sub(s)) / e.distanceToSquared(s); arm += w * sstep(0.42, 0.5, u); } }
+      const ankle = box.min.y + ht * 0.062;
+      const shoe = Math.max(sstep(0.35, 0.6, foot), 1 - sstep(ankle - 0.01, ankle + 0.01, v.y));
+      const collar = 1 - sstep(yNeck - ht * 0.045, yNeck - ht * 0.03, v.y);   // polo collar rides up the neck a little
+      const mask = (1 - sstep(0.4, 0.6, arm)) * Math.max(1 - sstep(0.3, 0.7, head), collar);
+      cw.set([mask, shoe, v.y, 0], i * 4);
+      if (shoe > 0.5) { const sb = v.x > 0 ? SB[0] : SB[1]; sb.expandByPoint(v); }
+    }
+    G.setAttribute('cloth', new THREE.BufferAttribute(cw, 4));
+    const bm = body.material; bm.map && (bm.map.colorSpace = THREE.SRGBColorSpace);
+    RM.scene = root; RM.body = body; RM.scale = 1.8 / ht; RM.minY = box.min.y; RM.headBone = 'Head'; RM.waist = waist; RM.beltH = beltH; RM.shX = Math.abs(sh[0].x - sh[1].x) / 2; RM.SB = SB; RM.footN = [SB[0].getCenter(new V3()).distanceTo(bw('foot_l')) < SB[0].getCenter(new V3()).distanceTo(bw('foot_r')) ? 'foot_l' : 'foot_r'];
+    RM.footN[1] = RM.footN[0] === 'foot_l' ? 'foot_r' : 'foot_l'; console.log('[l3] man ht', ht.toFixed(3), [...new Set((()=>{const a=[];root.traverse(o=>{if(o.isMesh)a.push(o.name+':'+o.material.name+':'+o.material.transparent+':'+(o.material.map&&o.material.map.format))});return a;})())].join(' '));
+    // hair: static mesh authored at the bind pose -> parent to the head bone
+    if (h) { RM.hair = h.scene; RM.hair.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } }); }
+    // clips: rotations only (+ pelvis translation) so the mannequin's bone lengths don't distort this body
+    RM.clips = {}; for (const c of a.animations) { const tr = c.tracks.filter(t => t.name.endsWith('.quaternion') && !/^(foot|ball|thigh|calf)_/.test(t.name)); RM.clips[c.name] = new THREE.AnimationClip(c.name, c.duration, tr); }
+  }
+  function clothMat(base, look) {
+    const m = base.clone();
+    const U = { cShirt: { value: new THREE.Color(look.shirt) }, cPants: { value: new THREE.Color(look.pants) }, cShoe: { value: new THREE.Color(0x120d0a) }, cBelt: { value: new THREE.Color(0x3a2416) }, cVest: { value: new THREE.Color(look.vest || 0) }, vest: { value: look.vest ? 1 : 0 }, uShX: { value: RM.shX * 0.8 }, uWaist: { value: RM.waist }, uBH: { value: RM.beltH } };
+    m.onBeforeCompile = (sh) => { Object.assign(sh.uniforms, U);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 cloth; uniform float vest, uShX, uWaist, uBH; varying vec4 vCloth; varying vec3 vOP; vec4 clothReg(vec3 c){ float sh = c.x * smoothstep(uWaist - 0.003, uWaist + 0.003, c.z); float be = c.x * (smoothstep(uWaist - uBH - 0.003, uWaist - uBH + 0.003, c.z) - smoothstep(uWaist - 0.003, uWaist + 0.003, c.z)); float sho = c.y; float pa = c.x * (1.0 - smoothstep(uWaist - uBH - 0.003, uWaist - uBH + 0.003, c.z)) * (1.0 - sho); return vec4(sh, pa, sho, be); }')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloth = cloth; vOP = position; vec4 cR = clothReg(cloth.xyz); transformed += objectNormal * (cR.x * (0.022 + vest * 0.035 * (1.0 - smoothstep(uShX - 0.03, uShX, abs(position.x)))) + cR.y * 0.024 - cR.z * 0.012 + cR.w * 0.026);');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 cShirt, cPants, cShoe, cBelt, cVest; uniform float vest, uShX, uWaist, uBH; varying vec4 vCloth; varying vec3 vOP; vec4 clothReg(vec3 c){ float sh = c.x * smoothstep(uWaist - 0.003, uWaist + 0.003, c.z); float be = c.x * (smoothstep(uWaist - uBH - 0.003, uWaist - uBH + 0.003, c.z) - smoothstep(uWaist - 0.003, uWaist + 0.003, c.z)); float sho = c.y; float pa = c.x * (1.0 - smoothstep(uWaist - uBH - 0.003, uWaist - uBH + 0.003, c.z)) * (1.0 - sho); return vec4(sh, pa, sho, be); }')
+        .replace('#include <map_fragment>', `#include <map_fragment>
+          vec4 CR = clothReg(vCloth.xyz);
+          float knit = 0.97 + 0.03 * sin(vOP.x * 420.0) * sin(vOP.y * 420.0);
+          float weave = 0.95 + 0.05 * sin((vOP.y + vOP.x) * 600.0);
+          float vz = vest * (1.0 - smoothstep(uShX - 0.03, uShX, abs(vOP.x))); vec3 shirtC = mix(cShirt, cVest * (0.9 + 0.1 * sin(vOP.y * 140.0)), vz);
+          float cl = clamp(CR.x + CR.y + CR.z + CR.w, 0.0, 1.0);
+          vec3 cc = (shirtC * knit * CR.x + cPants * weave * CR.y + cShoe * CR.z + cBelt * CR.w) / max(cl, 1e-3);
+          diffuseColor.rgb = mix(diffuseColor.rgb, cc, cl);`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+          roughnessFactor = mix(roughnessFactor, 0.9, CR.x); roughnessFactor = mix(roughnessFactor, 0.78, CR.y); roughnessFactor = mix(roughnessFactor, 0.28, CR.z); roughnessFactor = mix(roughnessFactor, 0.45, CR.w);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          normal = normalize(mix(normal, normalize(vNormal) * faceDirection, clamp(CR.x + CR.y + CR.z + CR.w, 0.0, 1.0)));`);
+    };
+    m.customProgramCacheKey = () => 'l3cloth';
+    return m;
+  }
+  function makeRealMan(look) {
+    const g = new THREE.Group(); g.rotation.order = 'YXZ';
+    const r = SkeletonUtils.clone(RM.scene); r.scale.setScalar(RM.scale); r.position.y = -RM.minY * RM.scale; g.add(r);
+    let body = null; r.traverse(o => { if (o.isSkinnedMesh) { o.frustumCulled = false; o.castShadow = true; if (o.geometry === RM.body.geometry) body = o; } });
+    body.material = clothMat(RM.body.material, look);
+    const bones = {}; body.skeleton.bones.forEach(b => { bones[b.name] = b; });
+    if (RM.hair) { r.updateMatrixWorld(true); const hr = RM.hair.clone(); hr.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color = new THREE.Color(look.hair).multiplyScalar(4.0); } });
+      r.add(hr); hr.position.set(0, 0, 0); hr.updateMatrixWorld(true); bones.Head.attach(hr); }
+    // slim the 'superhero' build toward a regular adult: narrower chest, slimmer arms (head/neck counter-scaled)
+    const sc = (n, x, y, z) => { if (bones[n]) bones[n].scale.set(x, y, z); };
+    sc('spine_03', 0.92, 1, 0.94); sc('neck_01', 1 / 0.92, 1, 1 / 0.94); sc('clavicle_l', 0.95, 1, 0.95); sc('clavicle_r', 0.95, 1, 0.95);
+    sc('upperarm_l', 0.86, 1, 0.86); sc('upperarm_r', 0.86, 1, 0.86); sc('hand_l', 1.08, 1, 1.08); sc('hand_r', 1.08, 1, 1.08);
+    sc('thigh_l', 0.93, 1, 0.93); sc('thigh_r', 0.93, 1, 0.93);
+    // dress shoes: polished leather upper + sole, fitted to the bind-pose foot bounds, riding the foot bone
+    r.updateMatrixWorld(true);
+    const leather = new THREE.MeshStandardMaterial({ color: 0x15100c, roughness: 0.25, metalness: 0.05 }), soleM = new THREE.MeshStandardMaterial({ color: 0x0b0806, roughness: 0.6 });
+    for (let s = 0; s < 2; s++) { const bb = RM.SB[s], c = bb.getCenter(new V3()), sz = bb.getSize(new V3());
+      const fwdZ = true; const L = (fwdZ ? sz.z : sz.x) + 0.015, Wd = (fwdZ ? sz.x : sz.z) + 0.008, Hh = Math.min(sz.y, 0.075) + 0.01;
+      const up = new THREE.SphereGeometry(0.5, 24, 14); const pa = up.attributes.position;
+      for (let i = 0; i < pa.count; i++) { let x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i); // z along the foot (+ = toe)
+        const toe = Math.max(0, z) * 2; x *= 1 - toe * 0.28; y = Math.max(y, -0.32) * (1 - toe * 0.35) - toe * 0.04; if (y < 0) y *= 0.6; pa.setXYZ(i, x, y, z); }
+      up.computeVertexNormals(); up.scale(Wd, Hh * 1.25, L * 0.97);
+      const shoe = new THREE.Group(); const um = new THREE.Mesh(up, leather); um.position.y = Hh * 0.35; shoe.add(um);
+      const so = new THREE.Mesh(new THREE.BoxGeometry(Wd * 0.74, 0.014, L * 0.8), soleM); so.position.set(0, 0.008, L * 0.04); shoe.add(so);
+      const hl = new THREE.Mesh(new THREE.BoxGeometry(Wd * 0.62, 0.028, L * 0.2), soleM); hl.position.set(0, 0.014, -L * 0.3); shoe.add(hl);
+      shoe.traverse(o => { if (o.isMesh) o.castShadow = true; });
+      // orientation: toe direction = horizontal offset from the foot bone (heel) to the bounds centre
+      const fb = bones[RM.footN[s]]; const hp = fb.getWorldPosition(new V3()).applyMatrix4(new THREE.Matrix4().copy(r.matrixWorld).invert());
+      const cl = c.clone(); let dz = cl.z - hp.z, dx = cl.x - hp.x; if (Math.hypot(dx, dz) < 1e-3) { dz = 1; dx = 0; }
+      shoe.position.set(c.x, bb.min.y, c.z + 0.01); shoe.rotation.y = 0;
+      r.add(shoe); shoe.updateMatrixWorld(true); fb.attach(shoe); }
+    r.traverse(o => { if (o.isMesh && o.material && /Hair_1/.test(o.material.name) && o !== body) { o.material = o.material.clone(); o.material.color = new THREE.Color(look.hair).multiplyScalar(2.5); } });
+    const mixer = new THREE.AnimationMixer(r);
+    const A = { idle: mixer.clipAction(RM.clips.Idle_Loop), talk: mixer.clipAction(RM.clips.Idle_Talking_Loop || RM.clips.Idle_Loop) };
+    A.idle.play(); A.talk.play(); A.talk.setEffectiveWeight(0);
+    return { real: true, g, r, mixer, A, bones, lastT: null, cur: 'idle', wTalk: 0, ua: [bones.upperarm_l, bones.upperarm_r], la: [bones.lowerarm_l, bones.lowerarm_r], fing: body.skeleton.bones.filter(b => /_(0[1-4])(_leaf)?_r$/.test(b.name) && /index|middle|ring|pinky|thumb/.test(b.name)).map(b => [b, b.quaternion.clone()]), hd: [bones.hand_l, bones.hand_r], cl: [bones.clavicle_l, bones.clavicle_r] };
+  }
+  // aim a bone (in its parent's space) so its +Y (bone axis) points along world dir d, blended by k on top of the animation
+  const _rq = new THREE.Quaternion(), _rq2 = new THREE.Quaternion(), _rqp = new THREE.Quaternion(), _rd = new V3(), _ry = new V3(0, 1, 0);
+  function aimBone(b, dir, k) {
+    if (k <= 0) return; b.parent.getWorldQuaternion(_rqp); b.updateWorldMatrix(true, false); b.getWorldQuaternion(_rq);
+    _rd.copy(_ry).applyQuaternion(_rq);                        // current bone axis (world)
+    _rq2.setFromUnitVectors(_rd, dir.clone().normalize());     // swing to target
+    _rq.premultiply(_rq2); _rq.premultiply(_rqp.invert());       // back to parent space
+    b.quaternion.slerp(_rq, k);
+  }
+  function poseRealMan(m, t, mode, k) {
+    const dt = m.lastT == null ? 0 : Math.min(0.1, Math.max(0, t - m.lastT)); m.lastT = t;
+    // idle <-> talking idle crossfade (talking idle has natural gestures; used while waving / between cheers)
+    m.wTalk += ((mode === 'idle' ? 0 : 0.0) - m.wTalk) * Math.min(1, dt * 3);
+    m.A.talk.setEffectiveWeight(m.wTalk); m.A.idle.setEffectiveWeight(1 - m.wTalk);
+    m.mixer.update(dt); m.g.updateMatrixWorld(true);
+    if (mode === 'idle' || k <= 0.001) return;
+    const gq = m.g.getWorldQuaternion(new THREE.Quaternion());
+    const W = (x, y, z) => new V3(x, y, z).applyQuaternion(gq);   // character space (x = his left, y up, z forward) -> world
+    if (mode === 'cheer') { // both fists punched up, pumping
+      const pmp = Math.abs(Math.sin(t * 5.5));
+      for (let s = 0; s < 2; s++) { const sd = s ? -1 : 1;
+        aimBone(m.ua[s], W(sd * 0.35, 1, 0.1), k); m.ua[s].updateMatrixWorld(true);
+        aimBone(m.la[s], W(sd * 0.15, 1, 0.25 + pmp * 0.5), k); m.la[s].updateMatrixWorld(true); }
+      m.g.position.y += 0; return;
+    }
+    // wave: right arm up beside the head, forearm swinging, palm forward
+    const wv = Math.sin(t * 7);
+    aimBone(m.ua[1], W(-0.85, 0.55, 0.15), k); m.ua[1].updateMatrixWorld(true);
+    aimBone(m.la[1], W(-0.25 + wv * 0.45, 1, 0.1), k); m.la[1].updateMatrixWorld(true);
+    for (const [b, q0] of m.fing) b.quaternion.slerp(q0, k * 0.85);
+  }
   // ---- rescue boat
   let BOAT = null;
   function buildBoat() {
+    loadRealMan();
     const g = new THREE.Group(); const L = 13, NS = 26, pos = [], col = [], idx = [];
     const orange = new THREE.Color(0xe2541c), white = new THREE.Color(0xf2f2ee), red = new THREE.Color(0x8a1e18);
     const sec = (w, dk, kl) => [[-w, dk], [-w * 0.98, 0.9], [-w * 0.86, 0.1], [-w * 0.45, -0.45], [0, kl], [w * 0.45, -0.45], [w * 0.86, 0.1], [w * 0.98, 0.9], [w, dk]];
@@ -1716,12 +1861,14 @@ export function createLevel3(C) {
     const fs = new THREE.Sprite(new THREE.SpriteMaterial({ map: ft, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false, toneMapped: false })); fs.scale.set(9, 9, 1); fs.visible = false; scene.add(fs);
     BOAT.flare = { s: fs, p: new V3(), v: new V3(), t: 0, on: false };
   }
+  function swapCrew() { if (!RM.ready || !BOAT || BOAT.crew.real) return; const o = BOAT.crew.g; const c = makeStandMan({ shirt: 0x24324a, hair: 0x2a1c14, pants: 0x2b2f36, vest: 0xff5a10 }); c.g.position.copy(o.position); c.g.rotation.copy(o.rotation); o.parent.add(c.g); o.parent.remove(o); BOAT.crew = c; poseStandMan(c, 0, 'idle', 1); }
   function updateBoat(dt, t) {
     if (!BOAT || !BOAT.g.visible) return;
     const x = BOAT_P.x, z = BOAT_P.z, B = fromBoat(0, 5), S = fromBoat(0, -5), Pt = fromBoat(-2, 0), Sb = fromBoat(2, 0);
     const hb = waterHJ(B[0], B[1]), hs = waterHJ(S[0], S[1]), hl = waterHJ(Pt[0], Pt[1]), hr = waterHJ(Sb[0], Sb[1]);
     BOAT.g.position.set(x, (hb + hs + hl + hr) / 4 - 0.15, z);
     BOAT.g.rotation.order = 'YXZ'; BOAT.g.rotation.set(-Math.atan2(hb - hs, 10) * 0.7, BOAT_YAW, Math.atan2(hr - hl, 4) * 0.5);
+    swapCrew();
     poseStandMan(BOAT.crew, t + 1.3, 'wave', 1); BOAT.bar.material.emissiveIntensity = (Math.sin(t * 9) > 0 ? 2.2 : 0.3);
     const F = BOAT.flare; BOAT.flT -= dt;
     if (BOAT.flT <= 0 && !F.on) { BOAT.flT = 22; F.on = true; F.t = 0; F.p.set(x, 4, z - 2); F.v.set(2, 42, 6); }
@@ -1916,12 +2063,12 @@ export function createLevel3(C) {
     m.body.rotation.z = 0; m.head.rotation.set(0, 0, 0); m.elb[0].rotation.x = m.elb[1].rotation.x = -0.35 * (1 - on); m.knees[0].rotation.x = m.knees[1].rotation.x = -0.4 * Math.abs(Math.sin(SWS.t * 6)) * (1 - on);
     m.tag.visible = false;
     // on deck: swap the swim rig for the standing man (real proportions, smooth joints) and animate him naturally
-    if (!W.dm) { const lk = m.lk; W.dm = makeStandMan({ shirt: new THREE.Color(lk[0]).multiplyScalar(0.9).getHex(), hair: lk[1], pants: lk[2] }); W.dm.g.scale.setScalar(1.08); W.dm.g.visible = false; scene.add(W.dm.g); W.dmT = 0; }
+    if (!W.dm) { const lk = m.lk; W.dm = makeStandMan({ shirt: new THREE.Color(lk[0]).multiplyScalar(0.9).getHex(), hair: lk[1], pants: lk[2] }); if (!W.dm.real) W.dm.g.scale.setScalar(1.08); W.dm.g.visible = false; scene.add(W.dm.g); W.dmT = 0; }
     const D = W.dm, onDeck = on > 0.55;
     m.g.visible = !onDeck; D.g.visible = onDeck;
     if (onDeck) {
       W.dmT += dt; const t = W.dmT, ph = slot * 0.9;
-      D.g.position.set(W.cx, deckY - 0.01, W.cz); D.g.rotation.set(BOAT.g.rotation.x * 0.3, BOAT_YAW + Math.PI + (slot % 3 - 1) * 0.35, 0);
+      D.g.position.set(W.cx, deckY + (D.real ? 0.015 : -0.01), W.cz); D.g.rotation.set(BOAT.g.rotation.x * 0.3, BOAT_YAW + Math.PI + (slot % 3 - 1) * 0.35, 0);
       const mode = t < 0.5 ? 'idle' : t < 3.2 ? 'cheer' : (Math.floor((t + ph) / 4) % 2 ? 'idle' : 'wave');
       const k = mode === 'cheer' ? sstep(0.5, 0.85, t) * (1 - sstep(2.9, 3.2, t)) : mode === 'wave' ? Math.min(sstep(0, 0.4, (t + ph) % 4), 1 - sstep(3.6, 4, (t + ph) % 4)) : 1;
       poseStandMan(D, t + ph, mode, k);
@@ -2240,6 +2387,7 @@ export function createLevel3(C) {
         for (const m of ms) for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'alphaMap', 'emissiveMap']) { const t = m[k]; if (t && !seen.has(t) && t.image) { seen.add(t); renderer.initTexture && renderer.initTexture(t); } } });
       renderer.initTexture && renderer.initTexture(HM); WARM.tex = seen.size; } catch (e) { console.warn('[l3] warm tex', e); }
     // everything visible once so every program compiles now (swim / wave / flare objects included)
+    swapCrew(); const boatVis = BOAT.g.visible; BOAT.g.visible = true;
     ensureSwim(); setSwimVisible(true); WAVE.visible = true; BOAT.flare.s.visible = true; if (WDEB) WDEB.ims.forEach(im => { im.visible = true; }); SW.forEach((W, i) => { W.m.g.position.set(PL.x + 3 + i, 0, PL.z + 4); }); SHARKS.forEach((S, i) => S.g.position.set(PL.x - 4 - i, -0.5, PL.z + 6));
     try { if (renderer.compileAsync) await renderer.compileAsync(scene, camera); else renderer.compile(scene, camera); } catch (e) { try { renderer.compile(scene, camera); } catch (e2) {} }
     const views = [['intro', 0.5], ['intro', 4.5], ['intro', 8], ['wave', 0], ['swim', 0]];
@@ -2251,7 +2399,7 @@ export function createLevel3(C) {
       else { const L = LADDER(); camera.position.set(L.x, 3, L.z + 40); camera.lookAt(L.x, 0, L.z); }
       await raf(); await raf(); WARM.steps++;
     }
-    U.uWaveH.value = 0; U.uFront.value = -3000; setSwimVisible(false); WAVE.visible = false; BOAT.flare.s.visible = false; if (WDEB) WDEB.ims.forEach(im => { im.visible = false; });
+    BOAT.g.visible = boatVis; U.uWaveH.value = 0; U.uFront.value = -3000; setSwimVisible(false); WAVE.visible = false; BOAT.flare.s.visible = false; if (WDEB) WDEB.ims.forEach(im => { im.visible = false; });
     WARM.ms = Math.round(performance.now() - t0);
     if (phase === 'warmview') phase = 'warm';
   }

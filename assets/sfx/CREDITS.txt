@@ -20,3 +20,9 @@ engine_idle.mp3, engine_rev.mp3
   https://freesound.org/people/kyles/sounds/450016/
   License: CC0 1.0 (public domain)
   Changes: idle (2-5 s) and high-rev hold (22.75-25.25 s) cut into crossfaded loops, mono 22 kHz, MP3 80 kbps; pitch/volume driven by RPM at runtime.
+
+Level 3 rescue-boat people (assets/l3/man/):
+- man.glb, hair.glb: "Universal Base Characters" (Superhero_Male_FullBody, Hair_SimpleParted) by Quaternius
+  https://quaternius.com/packs/universalbasecharacters.html - CC0 1.0 (public domain). Textures resized to 1024/512 WebP.
+- anims.glb: Idle_Loop + Idle_Talking_Loop from "Universal Animation Library" by Quaternius
+  https://quaternius.com/packs/universalanimationlibrary.html - CC0 1.0. Clothing is shader-painted in-game.
