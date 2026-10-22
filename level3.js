@@ -1792,24 +1792,10 @@ export function createLevel3(C) {
   function poseRealMan(m, t, mode, k) {
     const dt = m.lastT == null ? 0 : Math.min(0.1, Math.max(0, t - m.lastT)); m.lastT = t;
     // idle <-> talking idle crossfade (talking idle has natural gestures; used while waving / between cheers)
-    m.wTalk += ((mode === 'idle' ? 0 : 0.0) - m.wTalk) * Math.min(1, dt * 3);
+    // no bone overrides: 'cheer'/'wave' crossfade into the real mocap talking-idle (natural arm gestures), else plain idle
+    m.wTalk += ((mode === 'idle' ? 0 : 1) * k - m.wTalk) * Math.min(1, dt * 2.5);
     m.A.talk.setEffectiveWeight(m.wTalk); m.A.idle.setEffectiveWeight(1 - m.wTalk);
-    m.mixer.update(dt); m.g.updateMatrixWorld(true);
-    if (mode === 'idle' || k <= 0.001) return;
-    const gq = m.g.getWorldQuaternion(new THREE.Quaternion());
-    const W = (x, y, z) => new V3(x, y, z).applyQuaternion(gq);   // character space (x = his left, y up, z forward) -> world
-    if (mode === 'cheer') { // both fists punched up, pumping
-      const pmp = Math.abs(Math.sin(t * 5.5));
-      for (let s = 0; s < 2; s++) { const sd = s ? -1 : 1;
-        aimBone(m.ua[s], W(sd * 0.35, 1, 0.1), k); m.ua[s].updateMatrixWorld(true);
-        aimBone(m.la[s], W(sd * 0.15, 1, 0.25 + pmp * 0.5), k); m.la[s].updateMatrixWorld(true); }
-      m.g.position.y += 0; return;
-    }
-    // wave: right arm up beside the head, forearm swinging, palm forward
-    const wv = Math.sin(t * 7);
-    aimBone(m.ua[1], W(-0.85, 0.55, 0.15), k); m.ua[1].updateMatrixWorld(true);
-    aimBone(m.la[1], W(-0.25 + wv * 0.45, 1, 0.1), k); m.la[1].updateMatrixWorld(true);
-    for (const [b, q0] of m.fing) b.quaternion.slerp(q0, k * 0.85);
+    m.mixer.update(dt);
   }
   // ---- rescue boat
   let BOAT = null;
