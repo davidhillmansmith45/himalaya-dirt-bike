@@ -5248,7 +5248,7 @@ function startLevel3(opts) {
   if (L3loading) return L3loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l3] eg stop', e); }
   try { if (L2 && L2.active && L2.stop) L2.stop(); } catch (e) { console.warn('[l3] l2 stop', e); }
-  L3loading = import('./level3.js?v=9').then(mod => {
+  L3loading = import('./level3.js?v=10').then(mod => {
     L3 = mod.createLevel3({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L3 = L3;

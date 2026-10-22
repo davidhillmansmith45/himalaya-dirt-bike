@@ -1522,8 +1522,92 @@ export function createLevel3(C) {
         img.data[i] = img.data[i + 1] = img.data[i + 2] = 245; img.data[i + 3] = a * 255; }
       c.putImageData(img, 0, 0); }); return SKI_WAKE;
   }
+  // ---- jet-ski rider: the rigged Quaternius man seated astride the ski, posed by IK every frame
+  // (pelvis on the seat, two-bone IK legs to the footwells and arms to the grips, spine leaning forward, head kept level)
+  function skiPts(k) {
+    if (k.pts) return k.pts;
+    k.g.updateMatrixWorld(true); const inv = new THREE.Matrix4().copy(k.tilt.matrixWorld).invert(), meshes = [];
+    k.real.traverse(o => { if (o.isMesh) meshes.push(o); });
+    const rc = new THREE.Raycaster(), down = new V3(0, -1, 0).transformDirection(k.tilt.matrixWorld);
+    const hit = (x, z, y0) => { const o = new V3(x, y0 || 3, z).applyMatrix4(k.tilt.matrixWorld); rc.set(o, down); const h = rc.intersectObjects(meshes, false)[0]; return h ? h.point.applyMatrix4(inv).y : null; };
+    let seatY = -1, seatZ = -0.55; for (let z = -1.1; z <= 0.1; z += 0.05) { const y = hit(0, z); if (y != null && y > seatY && z < -0.2) { seatY = y; seatZ = z; } }
+    // seat crest -> the sitting spot a little behind it; footwells: lowest deck either side, forward of the seat
+    const bb0 = new THREE.Box3().setFromObject(k.bars), gz = bb0.getCenter(new V3()).applyMatrix4(inv).z;
+    seatZ = Math.max(seatZ - 0.12, gz - 0.7);                      // sit within arm's reach of the bars, not on the rear hump
+    let sy = hit(0, seatZ); if (sy == null) sy = seatY;
+    const foot = [-1, 1].map(sd => { let best = null; for (let x = 0.3; x <= 0.56; x += 0.03) for (let z = -0.5; z <= 0.15; z += 0.05) { const y = hit(sd * x, z, seatY + 0.2); if (y != null && y < seatY - 0.2 && (!best || y < best.y - 0.01)) best = new V3(sd * x, y, z); } return best || new V3(sd * 0.42, seatY - 0.36, -0.1); });
+    const bb = new THREE.Box3().setFromObject(k.bars), bc = bb.getCenter(new V3()).applyMatrix4(inv), bmin = bb.min.clone().applyMatrix4(inv), bmax = bb.max.clone().applyMatrix4(inv);
+    const half = Math.max(0.2, Math.abs(bmax.x - bmin.x) / 2 - 0.07);
+    k.pts = { seat: new V3(0, sy, seatZ), foot, grip: [new V3(-half, bc.y, bc.z), new V3(half, bc.y, bc.z)], barsLocal: k.bars.worldToLocal(new V3(0, 0, 0).applyMatrix4(k.tilt.matrixWorld)) };
+    console.log('[l3] ski pts', JSON.stringify(k.pts, (key, v) => typeof v === 'number' ? +v.toFixed(3) : v));
+    return k.pts;
+  }
+  const _ik = { a: new V3(), b: new V3(), c: new V3(), d: new V3(), e: new V3(), p: new V3(), q: new THREE.Quaternion() };
+  // two-bone IK: root bone b1 (+Y along the bone) and mid bone b2 so that the end (b3) lands on world target T; pole bends the joint
+  function ik2(b1, b2, b3, T, pole) {
+    const S = b1.getWorldPosition(_ik.a), M0 = b2.getWorldPosition(_ik.b), E0 = b3.getWorldPosition(_ik.c);
+    const L1 = S.distanceTo(M0), L2 = M0.distanceTo(E0), D = _ik.d.subVectors(T, S); let d = D.length(); d = clamp(d, Math.abs(L1 - L2) + 1e-3, L1 + L2 - 1e-3); D.normalize();
+    const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d), h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+    const P = _ik.e.copy(pole).addScaledVector(D, -pole.dot(D)).normalize();
+    const Mw = _ik.p.copy(S).addScaledVector(D, a).addScaledVector(P, h);
+    aimBone(b1, Mw.clone().sub(S), 1); b1.updateWorldMatrix(false, true);
+    const M1 = b2.getWorldPosition(new V3()), Tc = S.clone().addScaledVector(D, d);
+    aimBone(b2, Tc.sub(M1), 1); b2.updateWorldMatrix(false, true);
+  }
+  function sm0tint(sm, col) { sm.r.traverse(o => { if (o.isSkinnedMesh && o.material.onBeforeCompile) { const ob = o.material.onBeforeCompile; o.material.onBeforeCompile = (sh) => { ob(sh); sh.uniforms.cShirt.value = new THREE.Color(col); }; } }); }
+  function makeSkiMan(W) {
+    const lk = W.m.lk || [0x2a3a52, 0x2a1c14, 0x23262c];
+    const sm = makeRealMan({ shirt: new THREE.Color(W.R.col).getHex(), hair: lk[1], pants: lk[2] });
+    sm.mixer.stopAllAction(); sm.rest = []; sm.r.traverse(o => { if (o.isBone) sm.rest.push([o, o.quaternion.clone()]); });
+    sm.g.updateMatrixWorld(true); sm.pel = sm.g.worldToLocal(sm.bones.pelvis.getWorldPosition(new V3()));
+    sm.g.traverse(o => { if (o.isMesh) o.castShadow = false; });
+    W.ski.tilt.add(sm.g); return sm;
+  }
+  function poseSkiMan(W, dt) {
+    const k = W.ski; if (!k.real) return false;
+    if (!W.sm) W.sm = makeSkiMan(W);
+    const sm = W.sm, B = sm.bones, P = skiPts(k), tq = k.tilt.getWorldQuaternion(_ik.q);
+    if (sm.g.parent !== k.tilt) k.tilt.add(sm.g);
+    sm.g.visible = true; W.m.g.visible = false;
+    for (const [b, q] of sm.rest) b.quaternion.copy(q);
+    const cr = W.crouch || 0, ln = clamp(W.lean || 0, -0.6, 0.6);
+    // sit: pelvis just above the seat, shifted toward the inside of the turn
+    sm.g.position.set(P.seat.x - sm.pel.x - ln * 0.08, P.seat.y + 0.0 - sm.pel.y - cr * 0.05, P.seat.z - sm.pel.z); sm.g.rotation.set(0, 0, 0);
+    sm.g.updateMatrixWorld(true);
+    const L = (x, y, z) => new V3(x, y, z).applyQuaternion(tq);                      // tilt-local direction -> world
+    const T = (v) => v.clone().applyMatrix4(k.tilt.matrixWorld);                     // tilt-local point -> world
+    // spine: forward lean (more when crouching), lean into the turn
+    const fl = 0.5 + cr * 0.25, sl = -ln * 0.55;
+    aimBone(B.spine_01, L(Math.sin(sl), Math.cos(fl * 0.8), Math.sin(fl * 0.8)), 1); B.spine_01.updateWorldMatrix(false, true);
+    aimBone(B.spine_02, L(Math.sin(sl), Math.cos(fl), Math.sin(fl)), 1); B.spine_02.updateWorldMatrix(false, true);
+    aimBone(B.spine_03, L(Math.sin(sl) * 0.8, Math.cos(fl * 1.1), Math.sin(fl * 1.1)), 1); B.spine_03.updateWorldMatrix(false, true);
+    // neck up, head level with the horizon, looking ahead (world up, not the ski's)
+    aimBone(B.neck_01, L(0, 1, 0.45), 1); B.neck_01.updateWorldMatrix(false, true);
+    aimBone(B.Head, new V3(0, 1, 0).add(L(0, 0, 0.06)), 1); B.Head.updateWorldMatrix(false, true);
+    // hands to the grips (the bars turn with steering), elbows out and down
+    k.bars.updateWorldMatrix(true, false);
+    const steer = k.bars.rotation.y;
+    for (let s = 0; s < 2; s++) { const sd = s ? -1 : 1;                        // bones _l are on +x
+      const g0 = P.grip[s ? 0 : 1], gp = new V3(g0.x * Math.cos(steer), g0.y, g0.z - g0.x * Math.sin(steer) * 0.6);
+      const ua = B[s ? 'upperarm_r' : 'upperarm_l'], la = B[s ? 'lowerarm_r' : 'lowerarm_l'], hd = B[s ? 'hand_r' : 'hand_l'];
+      ik2(ua, la, hd, T(gp), L(sd * 0.8, -0.6, -0.5));
+      aimBone(hd, L(sd * 0.15, -0.35, 1), 0.8); hd.updateWorldMatrix(false, true);
+    }
+    // feet in the footwells, knees forward and a little out
+    for (let s = 0; s < 2; s++) { const sd = s ? -1 : 1;
+      const th = B[s ? 'thigh_r' : 'thigh_l'], ca = B[s ? 'calf_r' : 'calf_l'], ft = B[s ? 'foot_r' : 'foot_l'], f0 = P.foot[s ? 0 : 1];
+      const tgt = T(new V3(f0.x * 1.15, f0.y + 0.1, P.seat.z + 0.3 - cr * 0.05));
+      ik2(th, ca, ft, tgt, L(sd * 0.35, 0.5, 1));
+      aimBone(ft, L(0, -0.45, 1), 1); ft.updateWorldMatrix(false, true);
+    }
+    // fingers wrapped round the grips
+    if (sm.fingAll === undefined) { sm.fingAll = []; sm.r.traverse(o => { if (o.isBone && /(index|middle|ring|pinky)_0[1-3]_[lr]$/.test(o.name)) sm.fingAll.push(o); }); }
+    for (const f of sm.fingAll) f.quaternion.multiply(_ik.q.setFromAxisAngle(new V3(0, 0, 1), (/_l$/.test(f.name) ? 1 : -1) * 0.0)).multiply(new THREE.Quaternion().setFromAxisAngle(new V3(1, 0, 0), 1.0));
+    return true;
+  }
   // seated riding pose for the polo-shirt rider (the swimmer model is built lying along +z; stand it up and sit it down)
   function poseRider(W, dt) {
+    if (RM.ready && W.ski.real) { try { if (poseSkiMan(W, dt)) return; } catch (e) { console.warn('[l3] ski man', e); RM.ready = false; } }
     const m = W.m, k = W.ski; if (m.g.parent !== k.tilt) { k.tilt.add(m.g); m.g.scale.setScalar(1.12); }
     m.g.position.set(0, k.real ? 0.7 : 0.78, k.real ? -0.6 : -0.62); m.g.rotation.set(-Math.PI / 2 + 0.22 - (W.crouch || 0) * 0.25, 0, 0);
     m.body.rotation.z = (W.lean || 0) * 0.6;
@@ -2076,7 +2160,7 @@ export function createLevel3(C) {
     W.pitch += (tp - W.pitch) * Math.min(1, dt * 6);
     k.tilt.rotation.set(-W.pitch, 0, -W.lean - Math.sin(SWS.t * 2.1 + W.wob) * 0.03); k.bars.rotation.y = (W.inSteer || 0) * -0.35;
     if (W.offT > 0 || W.ko) { // rider in the water beside the ski
-      if (W.m.g.parent !== scene) scene.add(W.m.g);
+      if (W.m.g.parent !== scene) scene.add(W.m.g); W.m.g.visible = true; if (W.sm) W.sm.g.visible = false;
       W.m.g.scale.setScalar(1.3); W.m.g.position.set(W.x + Math.cos(W.yaw) * 1.4, wl - 0.1 - (W.ko ? Math.min(3, W.koT * 0.4) : 0), W.z - Math.sin(W.yaw) * 1.4); W.m.g.rotation.set(-0.3, W.yaw, 0.3);
       W.ph = (W.ph || 0) + dt * 5; const m = W.m; m.body.rotation.z = Math.sin(W.ph) * 0.3; for (let s = 0; s < 2; s++) { m.arms[s].rotation.set(-Math.PI / 2 + W.ph + s * Math.PI, 0, 0); m.elb[s].rotation.x = -0.4; m.legs[s].rotation.set(Math.sin(W.ph * 1.6 + s * 3) * 0.3, 0, 0); m.knees[s].rotation.x = -0.2; } m.head.rotation.set(0, 0, 0);
     } else poseRider(W, dt);
