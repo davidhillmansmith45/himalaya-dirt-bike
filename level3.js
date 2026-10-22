@@ -1417,7 +1417,7 @@ export function createLevel3(C) {
     const tag = nameTag(R); tag.position.set(0, 1.25, 0); g.add(tag);
     g.scale.setScalar(1.3);   // a touch larger than life so he reads on a phone screen
     g.visible = false; scene.add(g);
-    return { g, body, arms, elb, legs, knees, head, tag };
+    return { g, body, arms, elb, legs, knees, head, tag, lk };
   }
   // ---- jet ski (sit-down PWC, WaveRunner / Sea-Doo style): lofted V-hull, deck, hood, seat, handlebars, pump nozzle
   let SKI_HULL = null;
@@ -1559,6 +1559,114 @@ export function createLevel3(C) {
     const sc = 0.88 + (i % 5) * 0.09; g.scale.setScalar(sc); g.visible = false; scene.add(g);
     return { g, uni, jaw, sc };
   }
+  // ---- standing man (deck pose): y-up rig, real proportions (~1.8 m), smooth joints; used for the rider on the boat + the crewman
+  const STG = {};
+  function stGeo() {
+    if (STG.torso) return STG;
+    // torso lathe: hips (y=0) -> waist -> chest -> shoulders (y=0.56), flattened front/back
+    const prof = [[0.0, -0.02], [0.155, 0.0], [0.16, 0.08], [0.15, 0.17], [0.165, 0.28], [0.18, 0.4], [0.185, 0.47], [0.165, 0.53], [0.1, 0.565], [0.0, 0.575]].map(([r, y]) => new THREE.Vector2(r, y));
+    STG.torso = new THREE.LatheGeometry(prof, 24); STG.torso.scale(1.18, 1, 0.68);
+    STG.pelvis = new THREE.SphereGeometry(0.16, 18, 12); STG.pelvis.scale(1.12, 0.75, 0.78);
+    STG.belt = new THREE.CylinderGeometry(0.162, 0.162, 0.045, 24, 1, true); STG.belt.scale(1.13, 1, 0.7);
+    STG.buckle = new THREE.BoxGeometry(0.055, 0.04, 0.012);
+    STG.collar = new THREE.TorusGeometry(0.068, 0.02, 6, 18); STG.collar.rotateX(Math.PI / 2); STG.collar.scale(1.15, 1, 1.05);
+    STG.placket = new THREE.BoxGeometry(0.03, 0.12, 0.006);
+    STG.btn = new THREE.SphereGeometry(0.007, 6, 4);
+    STG.neck = new THREE.CylinderGeometry(0.052, 0.058, 0.12, 12);
+    STG.joint = new THREE.SphereGeometry(1, 14, 10);
+    STG.sleeve = new THREE.CylinderGeometry(0.07, 0.062, 0.17, 14, 1); STG.sleeve.translate(0, -0.07, 0);
+    STG.upper = new THREE.CapsuleGeometry(0.047, 0.24, 4, 12); STG.upper.translate(0, -0.15, 0);
+    STG.fore = new THREE.CapsuleGeometry(0.04, 0.22, 4, 12); STG.fore.translate(0, -0.13, 0);
+    const hand = new THREE.CapsuleGeometry(0.036, 0.07, 3, 8); hand.scale(1, 1, 0.55); hand.translate(0, -0.07, 0); STG.hand = hand;
+    const thumb = new THREE.CapsuleGeometry(0.014, 0.04, 3, 6); thumb.translate(0, -0.03, 0); STG.thumb = thumb;
+    STG.thigh = new THREE.CapsuleGeometry(0.078, 0.36, 4, 14); STG.thigh.translate(0, -0.22, 0);
+    STG.shin = new THREE.CapsuleGeometry(0.06, 0.37, 4, 14); STG.shin.translate(0, -0.22, 0);
+    const sh = new THREE.CapsuleGeometry(0.05, 0.17, 4, 10); sh.rotateX(Math.PI / 2); sh.scale(0.95, 0.7, 1); sh.translate(0, -0.035, 0.05); STG.shoe = sh;
+    STG.sole = new THREE.BoxGeometry(0.095, 0.018, 0.27); STG.sole.translate(0, -0.07, 0.05);
+    STG.skull = new THREE.SphereGeometry(0.1, 24, 18); STG.skull.scale(0.86, 1.06, 0.98);
+    STG.jaw = new THREE.SphereGeometry(0.075, 16, 12); STG.jaw.scale(0.92, 0.85, 0.95);
+    STG.chin = new THREE.SphereGeometry(0.03, 10, 8);
+    const hc = new THREE.SphereGeometry(0.105, 22, 14, 0, Math.PI * 2, 0, Math.PI * 0.52); hc.scale(0.9, 0.9, 1.02); STG.hairCap = hc;
+    const hb = new THREE.SphereGeometry(0.104, 18, 12, Math.PI * 0.6, Math.PI * 0.8, Math.PI * 0.35, Math.PI * 0.35); hb.scale(0.9, 1.04, 1.02); STG.hairBack = hb;
+    STG.nose = new THREE.ConeGeometry(0.016, 0.045, 8); STG.nose.rotateX(Math.PI / 2 + 0.25);
+    STG.ear = new THREE.SphereGeometry(0.024, 10, 8); STG.ear.scale(0.45, 1, 0.75);
+    STG.eye = new THREE.SphereGeometry(0.011, 8, 6);
+    STG.brow = new THREE.BoxGeometry(0.034, 0.008, 0.01);
+    STG.mouth = new THREE.BoxGeometry(0.035, 0.006, 0.006);
+    STG.vest = new THREE.CylinderGeometry(0.2, 0.19, 0.42, 20, 1, true); STG.vest.scale(1.1, 1, 0.75);
+    return STG;
+  }
+  // look: { shirt, hair, pants, vest? (life-jacket colour), cap? }
+  function makeStandMan(look) {
+    const G = stGeo();
+    const shirt = new THREE.MeshStandardMaterial({ color: look.shirt, roughness: 0.62 });
+    const hairM = new THREE.MeshStandardMaterial({ color: look.hair, roughness: 0.45 });
+    const pants = new THREE.MeshStandardMaterial({ color: look.pants, roughness: 0.7 });
+    const leather = new THREE.MeshStandardMaterial({ color: 0x2e1d12, roughness: 0.38 });
+    const shoeM = new THREE.MeshStandardMaterial({ color: 0x15100c, roughness: 0.22, metalness: 0.1 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xc0ad7a, roughness: 0.3, metalness: 0.9 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1a120e, roughness: 0.3 });
+    const lip = new THREE.MeshStandardMaterial({ color: 0x9a5a4a, roughness: 0.5 });
+    const M = (geo, mat, p, par, s) => { const m = new THREE.Mesh(geo, mat); if (p) m.position.set(p[0], p[1], p[2]); if (s) m.scale.setScalar(s); par.add(m); return m; };
+    const g = new THREE.Group(); g.rotation.order = 'YXZ';
+    const pelvis = new THREE.Group(); pelvis.position.y = 0.94; g.add(pelvis);          // weight shift + breathing pivot
+    M(G.pelvis, pants, [0, -0.02, 0], pelvis);
+    M(G.belt, leather, [0, 0.07, 0], pelvis); M(G.buckle, metal, [0, 0.07, 0.115], pelvis);
+    const chest = new THREE.Group(); chest.position.y = 0.06; pelvis.add(chest);        // spine
+    M(G.torso, shirt, [0, 0.0, 0], chest);
+    if (look.vest) { const vm = new THREE.MeshStandardMaterial({ color: look.vest, roughness: 0.55 }); M(G.vest, vm, [0, 0.31, 0], chest); }
+    else { M(G.placket, shirt, [0, 0.49, 0.112], chest); M(G.btn, metal, [0, 0.52, 0.116], chest); M(G.btn, metal, [0, 0.47, 0.118], chest); }
+    const col = M(G.collar, shirt, [0, 0.57, 0.005], chest); col.rotation.x = -0.18;
+    M(G.neck, SKIN, [0, 0.6, 0.0], chest);
+    const head = new THREE.Group(); head.position.set(0, 0.66, 0.005); chest.add(head);
+    const hd = new THREE.Group(); hd.position.y = 0.1; head.add(hd);
+    M(G.skull, SKIN, [0, 0.0, 0], hd); M(G.jaw, SKIN, [0, -0.055, 0.025], hd); M(G.chin, SKIN, [0, -0.095, 0.06], hd);
+    M(G.hairCap, hairM, [0, 0.03, -0.012], hd); M(G.hairBack, hairM, [0, -0.005, -0.004], hd);
+    M(G.nose, SKIN, [0, -0.01, 0.1], hd); M(G.mouth, lip, [0, -0.06, 0.085], hd);
+    for (const sd of [-1, 1]) { M(G.ear, SKIN, [sd * 0.088, -0.005, -0.005], hd); M(G.eye, dark, [sd * 0.033, 0.015, 0.088], hd); const br = M(G.brow, hairM, [sd * 0.034, 0.04, 0.09], hd); br.rotation.z = sd * -0.1; }
+    const arms = [], elb = [], legs = [], knees = [];
+    for (const sd of [-1, 1]) {
+      const shd = new THREE.Group(); shd.position.set(sd * 0.2, 0.5, -0.005); chest.add(shd);
+      M(G.joint, shirt, [0, 0, 0], shd, 0.072); M(G.sleeve, shirt, [0, 0, 0], shd); M(G.upper, SKIN, [0, 0, 0], shd);
+      const e = new THREE.Group(); e.position.set(0, -0.3, 0); shd.add(e);
+      M(G.joint, SKIN, [0, 0, 0], e, 0.044); M(G.fore, SKIN, [0, 0, 0], e);
+      const wr = new THREE.Group(); wr.position.set(0, -0.27, 0); e.add(wr);
+      const hn = M(G.hand, SKIN, [0, 0, 0], wr); hn.rotation.y = sd * 0.3; const th = M(G.thumb, SKIN, [-sd * 0.02, -0.02, 0.02], wr); th.rotation.set(0.3, 0, sd * 0.5);
+      arms.push(shd); elb.push(e);
+      const hip = new THREE.Group(); hip.position.set(sd * 0.095, -0.02, 0); pelvis.add(hip);
+      M(G.thigh, pants, [0, 0, 0], hip);
+      const kn = new THREE.Group(); kn.position.set(0, -0.44, 0); hip.add(kn);
+      M(G.joint, pants, [0, 0, 0], kn, 0.064); M(G.shin, pants, [0, 0, 0], kn);
+      const ft = new THREE.Group(); ft.position.set(0, -0.44, 0); kn.add(ft); M(G.shoe, shoeM, [0, 0, 0], ft); M(G.sole, dark, [0, 0, 0], ft);
+      legs.push(hip); knees.push(kn);
+    }
+    g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+    return { g, pelvis, chest, head, arms, elb, legs, knees };
+  }
+  // natural standing animation. mode: 'idle' | 'cheer' | 'wave'; t seconds; ph per-man phase offset
+  function poseStandMan(m, t, mode, k) {
+    k = k == null ? 1 : k;
+    const br = Math.sin(t * 1.6), sw = Math.sin(t * 0.55);
+    // weight shift onto one leg: hips sway + roll, standing knee straight, other knee soft; feet stay planted (hip roll compensated)
+    const shift = sw * 0.025;
+    m.pelvis.position.x = shift; m.pelvis.position.y = 0.94 - Math.abs(sw) * 0.008; m.pelvis.rotation.z = -sw * 0.04;
+    for (let s = 0; s < 2; s++) { const sd = s ? 1 : -1; m.legs[s].rotation.set(-0.02, 0, sw * 0.04 - shift / 0.9 * 1.0); m.knees[s].rotation.x = 0.04 + Math.max(0, sd * sw) * 0.08; m.legs[s].rotation.x -= Math.max(0, sd * sw) * 0.04; }
+    m.chest.rotation.set(-0.02 + br * 0.012, sw * 0.05, sw * 0.05); m.chest.scale.set(1, 1 + br * 0.006, 1 + br * 0.012);
+    m.head.rotation.set(0.04 - br * 0.01, -sw * 0.12, -sw * 0.03);
+    // arms
+    const rest = (s) => { const sd = s ? 1 : -1; m.arms[s].rotation.set(0.05 + br * 0.02, 0, sd * (0.09 + br * 0.01)); m.elb[s].rotation.set(-0.18, 0, 0); };
+    if (mode === 'idle') { rest(0); rest(1); return; }
+    if (mode === 'cheer') { // both arms up, pumping, little bounce
+      const pmp = Math.abs(Math.sin(t * 5.5));
+      for (let s = 0; s < 2; s++) { const sd = s ? 1 : -1; m.arms[s].rotation.set(-0.15, 0, sd * (2.75 - pmp * 0.25) * k + sd * 0.09 * (1 - k)); m.elb[s].rotation.set(-0.25 - pmp * 0.5 * k, 0, 0); }
+      m.pelvis.position.y += pmp * 0.025 * k; m.head.rotation.x -= 0.18 * k; for (let s = 0; s < 2; s++) m.knees[s].rotation.x += pmp * 0.1 * k; return;
+    }
+    // wave: right arm raised, forearm swinging side to side, left relaxed
+    rest(0);
+    const wv = Math.sin(t * 7);
+    m.arms[1].rotation.set(-0.25 * k, 0, (0.09 + 2.35 * k)); m.elb[1].rotation.set(0, 0, 0); m.elb[1].rotation.x = -0.25 * k; m.elb[1].rotation.z = (-0.55 + wv * 0.45) * k;
+    m.chest.rotation.z -= 0.04 * k; m.head.rotation.z += 0.05 * k;
+  }
   // ---- rescue boat
   let BOAT = null;
   function buildBoat() {
@@ -1598,14 +1706,11 @@ export function createLevel3(C) {
     for (const sd of [-1, 1]) { const ob = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.9, 0.55), new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.4 })); ob.position.set(sd * 1.1, 1.3, -L / 2 - 0.25); g.add(ob); }
     // life rings
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.08, 8, 16), new THREE.MeshStandardMaterial({ color: 0xff5a10, roughness: 0.6 })); ring.position.set(1.32, 2.4, 0.2); ring.rotation.y = Math.PI / 2; g.add(ring);
-    // a crewman waving at the stern
-    const crew = new THREE.Group(); const vest = new THREE.MeshStandardMaterial({ color: 0xff6a10, roughness: 0.6 });
-    const bdy = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 4, 8), vest); bdy.position.y = 0.75; crew.add(bdy);
-    const hd = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 8), SKIN); hd.position.y = 1.38; crew.add(hd);
-    const arm = new THREE.Group(); arm.position.set(0.24, 1.15, 0); crew.add(arm); const am = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.5, 3, 6), vest); am.position.y = 0.3; arm.add(am);
-    crew.position.set(-0.8, 1.55, -5.3); g.add(crew);
+    // a crewman in a life jacket at the stern, waving the riders in
+    const crewM = makeStandMan({ shirt: 0x24324a, hair: 0x2a1c14, pants: 0x2b2f36, vest: 0xff5a10 });
+    crewM.g.position.set(-1.45, 1.54, -2.3); crewM.g.rotation.y = Math.PI - 0.5; g.add(crewM.g);
     g.rotation.y = BOAT_YAW; g.visible = false; scene.add(g);
-    BOAT = { g, arm, bar, flare: null, flT: 3, hornT: 1.5, deckSlots: 0 };
+    BOAT = { g, crew: crewM, bar, flare: null, flT: 3, hornT: 1.5, deckSlots: 0 };
     // flare (additive glow sprite; no real light, so nothing recompiles)
     const ft = canvasTex(64, 64, (c) => { const gr = c.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,240,220,1)'); gr.addColorStop(0.25, 'rgba(255,60,30,0.9)'); gr.addColorStop(1, 'rgba(255,0,0,0)'); c.fillStyle = gr; c.fillRect(0, 0, 64, 64); });
     const fs = new THREE.Sprite(new THREE.SpriteMaterial({ map: ft, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false, toneMapped: false })); fs.scale.set(9, 9, 1); fs.visible = false; scene.add(fs);
@@ -1617,7 +1722,7 @@ export function createLevel3(C) {
     const hb = waterHJ(B[0], B[1]), hs = waterHJ(S[0], S[1]), hl = waterHJ(Pt[0], Pt[1]), hr = waterHJ(Sb[0], Sb[1]);
     BOAT.g.position.set(x, (hb + hs + hl + hr) / 4 - 0.15, z);
     BOAT.g.rotation.order = 'YXZ'; BOAT.g.rotation.set(-Math.atan2(hb - hs, 10) * 0.7, BOAT_YAW, Math.atan2(hr - hl, 4) * 0.5);
-    BOAT.arm.rotation.z = 2.4 + Math.sin(t * 5) * 0.5; BOAT.bar.material.emissiveIntensity = (Math.sin(t * 9) > 0 ? 2.2 : 0.3);
+    poseStandMan(BOAT.crew, t + 1.3, 'wave', 1); BOAT.bar.material.emissiveIntensity = (Math.sin(t * 9) > 0 ? 2.2 : 0.3);
     const F = BOAT.flare; BOAT.flT -= dt;
     if (BOAT.flT <= 0 && !F.on) { BOAT.flT = 22; F.on = true; F.t = 0; F.p.set(x, 4, z - 2); F.v.set(2, 42, 6); }
     if (F.on) { F.t += dt; F.v.y -= (F.v.y > -2 ? 12 : 0) * dt; F.p.addScaledVector(F.v, dt); F.s.visible = true; F.s.position.copy(F.p); const fl = 7 + Math.random() * 4; F.s.scale.set(fl, fl, 1);
@@ -1810,6 +1915,17 @@ export function createLevel3(C) {
     m.legs[0].rotation.set(Math.sin(SWS.t * 6) * 0.4 * (1 - on), 0, 0); m.legs[1].rotation.set(-Math.sin(SWS.t * 6) * 0.4 * (1 - on), 0, 0);
     m.body.rotation.z = 0; m.head.rotation.set(0, 0, 0); m.elb[0].rotation.x = m.elb[1].rotation.x = -0.35 * (1 - on); m.knees[0].rotation.x = m.knees[1].rotation.x = -0.4 * Math.abs(Math.sin(SWS.t * 6)) * (1 - on);
     m.tag.visible = false;
+    // on deck: swap the swim rig for the standing man (real proportions, smooth joints) and animate him naturally
+    if (!W.dm) { const lk = m.lk; W.dm = makeStandMan({ shirt: new THREE.Color(lk[0]).multiplyScalar(0.9).getHex(), hair: lk[1], pants: lk[2] }); W.dm.g.scale.setScalar(1.08); W.dm.g.visible = false; scene.add(W.dm.g); W.dmT = 0; }
+    const D = W.dm, onDeck = on > 0.55;
+    m.g.visible = !onDeck; D.g.visible = onDeck;
+    if (onDeck) {
+      W.dmT += dt; const t = W.dmT, ph = slot * 0.9;
+      D.g.position.set(W.cx, deckY - 0.01, W.cz); D.g.rotation.set(BOAT.g.rotation.x * 0.3, BOAT_YAW + Math.PI + (slot % 3 - 1) * 0.35, 0);
+      const mode = t < 0.5 ? 'idle' : t < 3.2 ? 'cheer' : (Math.floor((t + ph) / 4) % 2 ? 'idle' : 'wave');
+      const k = mode === 'cheer' ? sstep(0.5, 0.85, t) * (1 - sstep(2.9, 3.2, t)) : mode === 'wave' ? Math.min(sstep(0, 0.4, (t + ph) % 4), 1 - sstep(3.6, 4, (t + ph) % 4)) : 1;
+      poseStandMan(D, t + ph, mode, k);
+    }
   }
   // ---- sharks: roam (fins circling) -> stalk -> lock-on (warning) -> lunge -> bite / miss -> retreat
   const _s = new V3();
