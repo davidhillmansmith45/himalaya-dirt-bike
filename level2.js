@@ -215,9 +215,11 @@ export function createLevel2(C) {
     }
     // broken ends at each gap: section faces + rubble
     const rub = [];
-    for (const g of D.gaps) for (const [s, dir] of [[g[0], 1], [g[1], -1]]) {
+    // (also close both ends of the wall: a ruined section face down to the ground instead of a slab hanging in the air)
+    const ends = D.gaps.flatMap(g => [[g[0], 1], [g[1], -1]]).concat([[0, -1], [(D.n - 1) * D.ds, 1]]);
+    for (const [s, dir] of ends) {
       const f = frame(s, { ..._f });
-      const gy = Math.min(TH(f.x, f.z), f.y - 4) - 3;
+      const gy = Math.min(TH(f.x + f.rx * (HW + 2), f.z + f.rz * (HW + 2)), TH(f.x - f.rx * (HW + 2), f.z - f.rz * (HW + 2)), TH(f.x, f.z), f.y - 4) - 3;
       for (let k = 0; k < 6; k++) {
         const l0 = -HW - PAR + k * (W + 2 * PAR) / 6, l1 = l0 + (W + 2 * PAR) / 6;
         const jag = 0.4 + Math.random() * 1.2, yt = f.y - (k % 2 ? 0 : jag * 0.5);
@@ -373,7 +375,7 @@ export function createLevel2(C) {
   function buildNitro() {
     findPads();
     padMat = new THREE.MeshBasicMaterial({ map: padTex(), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 });
-    padGlow = new THREE.MeshBasicMaterial({ color: 0x46c8ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    padGlow = new THREE.MeshBasicMaterial({ color: 0x46c8ff, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
     const PLEN = 7, PW = Math.min(HW - 0.3, HW * 0.42);
     for (const P of PADS) {
       const gb = GB(), n = 4, gl = GB();
@@ -382,7 +384,7 @@ export function createLevel2(C) {
         const f0 = frame(s0, { ..._f }), f1 = frame(s1, { ..._f });
         const Q = (f, l, dy) => [f.x + f.rx * l, f.y + 0.06 + dy, f.z + f.rz * l];
         gb.quad(Q(f0, -PW, 0), Q(f0, PW, 0), Q(f1, PW, 0), Q(f1, -PW, 0), [0, k / n], [1, k / n], [1, (k + 1) / n], [0, (k + 1) / n]);
-        for (const sd of [-1, 1]) gl.quad(Q(f0, sd * PW, 0), Q(f0, sd * PW, 1.1), Q(f1, sd * PW, 1.1), Q(f1, sd * PW, 0), [0, 0], [0, 1], [1, 1], [1, 0]);
+        for (const sd of [-1, 1]) gl.quad(Q(f0, sd * PW, 0), Q(f0, sd * PW, 0.22), Q(f1, sd * PW, 0.22), Q(f1, sd * PW, 0), [0, 0], [0, 1], [1, 1], [1, 0]);
       }
       const m = new THREE.Mesh(gb.geo(), padMat); m.renderOrder = 2; scene.add(m);
       const gm = new THREE.Mesh(gl.geo(), padGlow); gm.renderOrder = 3; scene.add(gm);
@@ -500,6 +502,18 @@ export function createLevel2(C) {
     scene.add(g);
   }
 
+  // exact height of the rendered terrain triangles (props sit on what you see, not on the finer heightmap)
+  let MHG = null;
+  function MH(x, z) {
+    if (!MHG) return TH(x, z);
+    const { n, hh, half, step } = MHG, gx = clamp((x + half) / step, 0, n - 1.001), gz = clamp((z + half) / step, 0, n - 1.001), ix = gx | 0, iz = gz | 0, fx = gx - ix, fz = gz - iz;
+    const a = hh[iz * n + ix], d = hh[iz * n + ix + 1], b = hh[(iz + 1) * n + ix], c = hh[(iz + 1) * n + ix + 1];
+    return fx + fz <= 1 ? a + (d - a) * fx + (b - a) * fz : c + (b - c) * (1 - fx) + (d - c) * (1 - fz);
+  }
+  function inPlaza(x, z, pad) {   // inside the start terrace footprint (+ margin)
+    const f = frame(D.start, { ..._f }), dx = x - f.x, dz = z - f.z, al = dx * f.tx + dz * f.tz, ac = dx * f.rx + dz * f.rz;
+    return Math.abs(al) < 30 + pad && ac > HW + PAR - pad && ac < HW + PAR + 40 + pad;
+  }
   function buildTerrain() {
     const n = IS_MOBILE ? 220 : 330, size = TG.size * 0.999, half = size / 2;
     const g = new THREE.PlaneGeometry(size, size, n - 1, n - 1); g.rotateX(-Math.PI / 2);
@@ -508,6 +522,7 @@ export function createLevel2(C) {
     const vn = (x, z) => { const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz, sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
       return lerp(lerp(hash(ix, iz), hash(ix + 1, iz), sx), lerp(hash(ix, iz + 1), hash(ix + 1, iz + 1), sx), sz); };
     for (let i = 0; i < pos.count; i++) { const x = pos.getX(i), z = pos.getZ(i); pos.setY(i, TH(x, z)); }
+    { const hh = new Float32Array(n * n); for (let i = 0; i < pos.count; i++) hh[i] = pos.getY(i); MHG = { n, hh, half, step: size / (n - 1) }; }
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), z = pos.getZ(i), y = pos.getY(i);
       // baked horizon ambient occlusion (8 directions, 3 radii)
@@ -522,15 +537,15 @@ export function createLevel2(C) {
     g.setAttribute('color', new THREE.BufferAttribute(cols, 4));
     g.computeVertexNormals();
     const sat = tload('./assets/l2/sat.jpg?v=1'); sat.colorSpace = THREE.SRGBColorSpace; sat.anisotropy = aniso;
-    const fg = tx('leaves_forest_ground_Diffuse', true), fgn = tx('leaves_forest_ground_nor_gl'), rk = tx('rocky_terrain_02_Diffuse', true), rkn = tx('rocky_terrain_02_nor_gl');
+    const fg = tx('forrest_ground_01_1k_Diffuse', true), fgn = tx('forrest_ground_01_1k_nor_gl'), rk = tx('rocky_terrain_02_1k_Diffuse', true), rkn = tx('rocky_terrain_02_1k_nor_gl'), gr = tx('aerial_grass_rock_1k_Diffuse', true);
     const mat = new THREE.MeshStandardMaterial({ map: sat, normalMap: fgn, vertexColors: true, roughness: 0.95 });
     mat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, { tFG: { value: fg }, tRK: { value: rk }, tRKN: { value: rkn }, tNoise: { value: NOISE }, uHalf: { value: TG.half }, uSize: { value: TG.size } });
+      Object.assign(sh.uniforms, { tGR: { value: gr }, tFG: { value: fg }, tRK: { value: rk }, tRKN: { value: rkn }, tNoise: { value: NOISE }, uHalf: { value: TG.half }, uSize: { value: TG.size } });
       sh.vertexShader = 'varying vec3 vWp;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWp = (modelMatrix * vec4(transformed,1.0)).xyz;');
-      sh.fragmentShader = 'uniform sampler2D tFG, tRK, tRKN, tNoise; uniform float uHalf, uSize; varying vec3 vWp;\n' + sh.fragmentShader
+      sh.fragmentShader = 'uniform sampler2D tGR, tFG, tRK, tRKN, tNoise; uniform float uHalf, uSize; varying vec3 vWp;\n' + sh.fragmentShader
         .replace('#include <map_fragment>', `
         vec2 suv = (vWp.xz + uHalf) / uSize;
-        vec3 sat = texture2D(map, vec2(suv.x, 1.0 - suv.y)).rgb;
+        vec3 sat = texture2D(map, vec2(suv.x, 1.0 - suv.y)).rgb; float vAOraw = vColor.r;
         float dist = distance(vWp, cameraPosition);
         float nz = texture2D(tNoise, vWp.xz / 300.0).r;
         // autumn: shift the summer satellite greens toward russet / gold / crimson in patches
@@ -544,25 +559,39 @@ export function createLevel2(C) {
         alb *= mix(1.0, mix(0.42, 1.4, smoothstep(0.3, 0.7, cn)), forest);
         alb *= 1.1;
         // near detail: forest floor / rock by slope, luminance-modulated so the satellite colour is kept
-        float near = 1.0 - smoothstep(60.0, 420.0, dist);
+        // mid-distance: tiled aerial grass/rock breaks up the soft satellite pixels (out to ~1 km)
+        float mid = 1.0 - smoothstep(250.0, 1100.0, dist);
+        { vec3 m1 = texture2D(tGR, vWp.xz / 38.0).rgb, m2 = texture2D(tGR, vWp.xz / 131.0 + 0.37).rgb;
+          float ml = dot(mix(m1, m2, 0.5), vec3(0.333)) / 0.30; alb *= mix(1.0, clamp(ml, 0.6, 1.4), mid * 0.4); }
+        // near: high-res PBR ground. Forest-floor dirt and grass blended by noise + hollows (AO), triplanar rock on steep slopes; two scales to hide tiling
+        float near = 1.0 - smoothstep(50.0, 360.0, dist);
         if (near > 0.0) {
-          vec3 d1 = texture2D(tFG, vWp.xz / 5.0).rgb, d2 = texture2D(tRK, vWp.xz / 7.0).rgb;
-          float rock = vColor.g;
-          vec3 det = mix(d1 / 0.22, d2 / 0.30, rock);
-          alb = mix(alb, alb * clamp(det, 0.3, 2.2), near * 0.85);
-          alb = mix(alb, d2 * 0.9, rock * near * 0.6);
+          vec2 p = vWp.xz;
+          float var = texture2D(tNoise, p / 23.0).g;
+          vec3 dirt = mix(texture2D(tFG, p / 4.2).rgb, texture2D(tFG, p / 13.7 + 0.21).rgb, 0.35);
+          vec3 grs = mix(texture2D(tGR, p / 6.0).rgb, texture2D(tGR, p / 19.0 + 0.5).rgb, 0.4);
+          vec3 wn = normalize(cross(dFdx(vWp), dFdy(vWp))); vec3 bw = pow(abs(wn), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
+          vec3 rkc = texture2D(tRK, vWp.zy / 6.5).rgb * bw.x + texture2D(tRK, p / 6.5).rgb * bw.y + texture2D(tRK, vWp.xy / 6.5).rgb * bw.z;
+          float rock = smoothstep(0.25, 0.75, vColor.g);
+          float dg = smoothstep(0.35, 0.65, var + (1.0 - vAOraw) * 0.6 - 0.1);
+          vec3 gnd = mix(grs, dirt, dg);
+          vec3 det = mix(gnd, rkc, rock);
+          float lum = dot(det, vec3(0.333)) + 1e-3;
+          // keep the large-scale (satellite/autumn) colour, take the small-scale structure + some hue from the PBR set
+          vec3 tgt = mix(alb * clamp(lum / 0.30, 0.4, 1.8), det * 0.78, 0.32);
+          alb = mix(alb, tgt, near);
         }
         diffuseColor.rgb *= alb;`)
         .replace('#include <color_fragment>', 'float vAO = vColor.r;')
         .replace('#include <normal_fragment_maps>', `
         { float near2 = 1.0 - smoothstep(40.0, 300.0, distance(vWp, cameraPosition));
-          vec3 mnA = texture2D(normalMap, vWp.xz / 5.0).xyz * 2.0 - 1.0, mnB = texture2D(tRKN, vWp.xz / 7.0).xyz * 2.0 - 1.0;
+          vec3 mnA = texture2D(normalMap, vWp.xz / 4.2).xyz * 2.0 - 1.0, mnB = texture2D(tRKN, vWp.xz / 6.5).xyz * 2.0 - 1.0;
           vec3 mn = mix(mnA, mnB, vColor.g); mn.xy *= 1.2 * near2;
           vec3 T = normalize(vec3(viewMatrix * vec4(1.0, 0.0, 0.0, 0.0))), B = normalize(vec3(viewMatrix * vec4(0.0, 0.0, -1.0, 0.0)));
           normal = normalize(mat3(T, B, normal) * vec3(mn.xy, 1.0) + normal * 0.0); }`)
         .replace('#include <aomap_fragment>', `reflectedLight.indirectDiffuse *= vAO; reflectedLight.directDiffuse *= mix(1.0, vAO, 0.35);`);
     };
-    mat.customProgramCacheKey = () => 'l2terrain2';
+    mat.customProgramCacheKey = () => 'l2terrain3';
     const o = new THREE.Mesh(g, mat); o.receiveShadow = true; scene.add(o);
     buildTrees(); buildGrass();
   }
@@ -617,6 +646,103 @@ export function createLevel2(C) {
     }
     return { trunk: mergeGeometries(trunk.map(g => g.toNonIndexed())), cards: mergeGeometries(cards) };
   }
+  // ---------- volumetric 3D trees: branching trunk + randomly oriented leaf-cluster cards (ambientCG CC0 LeafSet024 photo leaves),
+  // chunked instancing with 3 LODs (full / reduced cards / displaced crown mesh). Nothing faces the camera, so nothing spins.
+  const TCH = [];
+  const TREE_LOD = IS_MOBILE ? [75, 240] : [130, 420];
+  const RR = (a, b) => a + Math.random() * (b - a);
+  function cyl(r0, r1, h, seg, from, to) {   // tapered cylinder from point to point
+    const g = new THREE.CylinderGeometry(r1, r0, h, seg, 1, true); g.translate(0, h / 2, 0);
+    const dir = new V3().subVectors(to, from).normalize(), q = new THREE.Quaternion().setFromUnitVectors(new V3(0, 1, 0), dir);
+    g.applyQuaternion(q); g.translate(from.x, from.y, from.z);
+    const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 2, uv.getY(i) * h * 6); return g.toNonIndexed();
+  }
+  function cards(n, cen, rad, size, rnd, nrmC) {   // leaf-cluster cards scattered on/in an ellipsoid shell, random 3D orientation
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const u = Math.random() * 2 - 1, th = Math.random() * 6.28, rr = Math.pow(Math.random(), 0.35), sq = Math.sqrt(1 - u * u);
+      const p = new V3(Math.cos(th) * sq * rad.x * rr, u * rad.y * rr, Math.sin(th) * sq * rad.z * rr).add(cen);
+      const sz = size * RR(0.8, 1.2), c = new THREE.PlaneGeometry(sz, sz);
+      c.rotateZ(Math.random() * 6.28); c.rotateX(RR(-1.3, 1.3) * rnd); c.rotateY(Math.random() * 6.28); c.translate(p.x, p.y, p.z);
+      const pp = c.attributes.position, nn = c.attributes.normal;
+      for (let k = 0; k < pp.count; k++) { const v = new V3(pp.getX(k), pp.getY(k), pp.getZ(k)).sub(nrmC || cen).normalize(); nn.setXYZ(k, v.x, v.y + 0.25, v.z); }
+      out.push(c);
+    }
+    return out;
+  }
+  function makeTreeGeo(kind) {
+    const L = [];
+    if (kind === 'oak') {
+      // LOD0: trunk + 5 limbs + 34 clusters; LOD1: trunk + 12 bigger clusters; LOD2: displaced crown blob
+      const base = new V3(0, 0, 0), top = new V3(RR(-0.03, 0.03), 0.5, RR(-0.03, 0.03)), t0 = [cyl(0.05, 0.03, 0.5, 7, base, top)], cen = new V3(0, 0.66, 0), rad = new V3(0.36, 0.28, 0.36);
+      const limbs = []; for (let k = 0; k < 5; k++) { const a = k * 1.26 + RR(0, 0.5), from = new V3(0, RR(0.3, 0.46), 0), to = new V3(Math.cos(a) * RR(0.18, 0.28), RR(0.62, 0.8), Math.sin(a) * RR(0.18, 0.28)); limbs.push(cyl(0.022, 0.008, from.distanceTo(to), 5, from, to)); }
+      L.push({ trunk: mergeGeometries(t0.concat(limbs)), leaves: mergeGeometries(cards(34, cen, rad, 0.3, 1)) });
+      L.push({ trunk: mergeGeometries([cyl(0.05, 0.03, 0.5, 5, base, top)]), leaves: mergeGeometries(cards(12, cen, rad.clone().multiplyScalar(0.8), 0.44, 1)) });
+      const blob = new THREE.IcosahedronGeometry(1, 1), bp = blob.attributes.position;
+      for (let i = 0; i < bp.count; i++) { const v = new V3(bp.getX(i), bp.getY(i), bp.getZ(i)); v.multiplyScalar(RR(0.82, 1.12)); bp.setXYZ(i, v.x * 0.36, 0.64 + v.y * 0.28, v.z * 0.36); }
+      blob.computeVertexNormals(); L.push({ leaves: mergeGeometries([blob.toNonIndexed(), cyl(0.05, 0.03, 0.4, 4, base, new V3(0, 0.4, 0))].map(g => { g.deleteAttribute('uv'); return g; })) });
+    } else {
+      const base = new V3(0, 0, 0), top = new V3(0, 1, 0), tiers0 = [], tiers1 = [];
+      for (let t = 0; t < 8; t++) { const y = 0.2 + t * 0.1, w = 0.5 * (1 - t / 8) + 0.08;
+        for (let k = 0; k < 6; k++) { const a = k * 1.047 + t * 0.5, c = new THREE.PlaneGeometry(w, w * 0.7); c.translate(0, 0, w * 0.35); c.rotateX(-Math.PI / 2 + 0.55); c.rotateY(a); c.translate(0, y, 0);
+          const nn = c.attributes.normal, pp = c.attributes.position; for (let i = 0; i < pp.count; i++) { const v = new V3(pp.getX(i), 0.4, pp.getZ(i)).normalize(); nn.setXYZ(i, v.x, v.y, v.z); } tiers0.push(c); }
+        if (t % 2 === 0) for (let k = 0; k < 4; k++) { const a = k * 1.57 + t, ww = w * 1.15, c = new THREE.PlaneGeometry(ww, ww * 0.8); c.translate(0, 0, ww * 0.38); c.rotateX(-Math.PI / 2 + 0.6); c.rotateY(a); c.translate(0, y + 0.04, 0);
+          const nn = c.attributes.normal, pp = c.attributes.position; for (let i = 0; i < pp.count; i++) { const v = new V3(pp.getX(i), 0.4, pp.getZ(i)).normalize(); nn.setXYZ(i, v.x, v.y, v.z); } tiers1.push(c); } }
+      L.push({ trunk: mergeGeometries([cyl(0.035, 0.008, 1, 6, base, top)]), leaves: mergeGeometries(tiers0) });
+      L.push({ trunk: mergeGeometries([cyl(0.035, 0.01, 0.9, 4, base, new V3(0, 0.9, 0))]), leaves: mergeGeometries(tiers1) });
+      const cone = new THREE.ConeGeometry(0.26, 0.86, 7, 3, true); cone.translate(0, 0.6, 0); const cp = cone.attributes.position;
+      for (let i = 0; i < cp.count; i++) { const k = RR(0.85, 1.12); cp.setXYZ(i, cp.getX(i) * k, cp.getY(i), cp.getZ(i) * k); }
+      cone.computeVertexNormals(); L.push({ leaves: mergeGeometries([cone.toNonIndexed(), cyl(0.035, 0.02, 0.3, 4, base, new V3(0, 0.3, 0))].map(g => { g.deleteAttribute('uv'); return g; })) });
+    }
+    return L;
+  }
+  function treeMats() {
+    const m = mats(), lt = tload('./assets/l2/leaf_cluster.webp?v=1'); lt.colorSpace = THREE.SRGBColorSpace; lt.anisotropy = 4;
+    const leafM = (map, key) => { const lm = new THREE.MeshStandardMaterial({ map, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.8 });
+      lm.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n reflectedLight.directDiffuse += diffuseColor.rgb * 0.22 * vec3(1.0, 0.85, 0.55);'); };
+      lm.customProgramCacheKey = () => key; return lm; };
+    const blobM = new THREE.MeshStandardMaterial({ roughness: 0.95 });
+    blobM.onBeforeCompile = (sh) => { sh.uniforms.tNoise = { value: NOISE };
+      sh.vertexShader = 'varying vec3 vTp;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvTp = position;');
+      sh.fragmentShader = 'uniform sampler2D tNoise; varying vec3 vTp;\n' + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n float bn = texture2D(tNoise, vTp.xz * 3.0 + vTp.y * 2.0).r; diffuseColor.rgb *= mix(0.55, 1.25, bn) * mix(0.6, 1.0, clamp(vTp.y * 1.4 - 0.3, 0.0, 1.0));'); };
+    blobM.customProgramCacheKey = () => 'l2blob';
+    return { oak: leafM(lt, 'l2leafO'), pine: leafM(leafAtlas('pine'), 'l2leafP'), bark: m.bark, blob: blobM };
+  }
+  function buildTreeModels(trees, farTrees) {
+    const TM = treeMats(), G = { oak: makeTreeGeo('oak'), pine: makeTreeGeo('pine') };
+    const autumn = [0xd2601c, 0xe39a30, 0xb0361c, 0xe8c048, 0x9aa040, 0x7a9634, 0xc47c2a, 0xa03018, 0x6a8a30, 0xd8a838];
+    const pinec = [0x4a6a34, 0x405e30, 0x56743e];
+    const mt = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new V3(), c = new THREE.Color();
+    const inst = (geo, mat, list, cast) => { const im = new THREE.InstancedMesh(geo, mat, list.length);
+      list.forEach((e, i) => { mt.compose(e.pos, e.q, sc.set(e.h * e.w, e.h, e.h * (2 - e.w))); im.setMatrixAt(i, mt); im.setColorAt(i, e.col); });
+      im.computeBoundingSphere(); im.castShadow = cast; scene.add(im); return im; };
+    const rec = (t, kind, far) => { q.setFromAxisAngle(new V3(0, 1, 0), Math.random() * 6.28);
+      const h = kind === 'pine' ? RR(9, 15) : RR(7, 12.5);
+      c.setHex(kind === 'pine' ? pinec[(Math.random() * 3) | 0] : autumn[(Math.random() * autumn.length) | 0]).multiplyScalar(RR(0.75, 1.1) * (far ? 0.85 : 1));
+      return { pos: new V3(t.x, t.y - 0.25, t.z), q: q.clone(), h, w: RR(0.88, 1.12), col: c.clone() }; };
+    const CS = 160, grid = new Map();
+    for (const t of trees) { const key = Math.floor(t.x / CS) + ',' + Math.floor(t.z / CS); let g = grid.get(key); if (!g) { g = { oak: [], pine: [], cx: 0, cz: 0, n: 0 }; grid.set(key, g); }
+      g[t.pine ? 'pine' : 'oak'].push(rec(t, t.pine ? 'pine' : 'oak')); g.cx += t.x; g.cz += t.z; g.n++; }
+    for (const g of grid.values()) {
+      const ch = { cx: g.cx / g.n, cz: g.cz / g.n, lod: [[], [], []], cur: -1 };
+      for (const kind of ['oak', 'pine']) { const list = g[kind]; if (!list.length) continue;
+        for (let l = 0; l < 2; l++) { ch.lod[l].push(inst(G[kind][l].trunk, TM.bark, list, !IS_MOBILE && l === 0), inst(G[kind][l].leaves, TM[kind], list, !IS_MOBILE && l === 0)); }
+        ch.lod[2].push(inst(G[kind][2].leaves, TM.blob, list, false)); }
+      for (const l of ch.lod) for (const m of l) m.visible = false;
+      TCH.push(ch);
+    }
+    // far band (200 m+ off the wall): crown meshes only, a handful of big instanced batches
+    for (const kind of ['oak', 'pine']) { const list = farTrees.filter(t => !!t.pine === (kind === 'pine')).map(t => rec(t, kind, true)); if (list.length) inst(G[kind][2].leaves, TM.blob, list, false); }
+    updateTreeLOD(camera.position, true);
+    console.log('[l2] 3D trees', trees.length, '+', farTrees.length, 'chunks', TCH.length);
+  }
+  function updateTreeLOD(cp, force) {
+    for (const ch of TCH) {
+      const d = Math.hypot(ch.cx - cp.x, ch.cz - cp.z) - 80, l = d < TREE_LOD[0] ? 0 : d < TREE_LOD[1] ? 1 : 2;
+      if (l === ch.cur && !force) continue; ch.cur = l;
+      for (let k = 0; k < 3; k++) for (const m of ch.lod[k]) m.visible = k === l;
+    }
+  }
   function buildTrees() {
     const m = mats();
     const kinds = ['oak', 'pine'], data = { oak: [], pine: [], far: { oak: [], pine: [] } };
@@ -630,8 +756,8 @@ export function createLevel2(C) {
       if (Math.abs(x) > TG.half - 30 || Math.abs(z) > TG.half - 30) return null;
       const sz = (cl.pine ? 9 : 7) + Math.random() * 6;
       const pr = project(x, z, cl.s); if (Math.abs(pr.lat) < HW + PAR + sz * 0.65 + 2.5) return null;
-      if (Math.hypot(x - D.plaza[0], z - D.plaza[1]) < 50) return null;
-      const y = TH(x, z), sl = Math.hypot(TH(x + 4, z) - TH(x - 4, z), TH(x, z + 4) - TH(x, z - 4)) / 8; if (sl > 1.0) return null;
+      if (Math.hypot(x - D.plaza[0], z - D.plaza[1]) < 50 || inPlaza(x, z, 12)) return null;
+      const y = MH(x, z), sl = Math.hypot(TH(x + 4, z) - TH(x - 4, z), TH(x, z + 4) - TH(x, z - 4)) / 8; if (sl > 1.0) return null;
       return { x, y, z, sz, pine: cl.pine && Math.random() < 0.9 };
     };
     while (k < nNear && tries++ < nNear * 10) { const t = place(true); if (t) { (t.pine ? data.pine : data.oak).push(t); k++; } }
@@ -640,26 +766,7 @@ export function createLevel2(C) {
     const autumn = [0xc4561a, 0xd98c2a, 0xa8301a, 0xe0b040, 0x8a9a38, 0x6d8a30, 0xb87428, 0x9c2c18, 0x5f7a2a];
     const pinec = [0x3b5a2c, 0x34502a, 0x46663a];
     const mt = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), sc = new V3();
-    for (const kind of kinds) {
-      const arr = data[kind]; if (!arr.length) continue;
-      const G0 = treeGeo(kind), atlas = leafAtlas(kind);
-      const lm = new THREE.MeshStandardMaterial({ map: atlas, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.85 });
-      lm.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n reflectedLight.directDiffuse += diffuseColor.rgb * 0.18 * vec3(1.0, 0.85, 0.5);'); };   // cheap leaf translucency
-      lm.customProgramCacheKey = () => 'l2leaf';
-      const ti = new THREE.InstancedMesh(G0.trunk, m.bark, arr.length), li = new THREE.InstancedMesh(G0.cards, lm, arr.length);
-      arr.forEach((t, i) => { q.setFromAxisAngle(new V3(0, 1, 0), Math.random() * 6.28); mt.compose(new V3(t.x, t.y - 0.3, t.z), q, sc.set(t.sz * (0.85 + Math.random() * 0.3), t.sz, t.sz * (0.85 + Math.random() * 0.3)));
-        ti.setMatrixAt(i, mt); li.setMatrixAt(i, mt);
-        c.setHex(kind === 'pine' ? pinec[i % 3] : autumn[(Math.random() * autumn.length) | 0]).multiplyScalar(0.75 + Math.random() * 0.35); li.setColorAt(i, c); });
-      ti.castShadow = li.castShadow = !IS_MOBILE; li.receiveShadow = true; scene.add(ti, li);
-      // far impostors: two crossed cards
-      const fa = data.far[kind]; if (!fa.length) continue;
-      const ig = mergeGeometries([new THREE.PlaneGeometry(0.5, 1).translate(0, 0.5, 0), new THREE.PlaneGeometry(0.5, 1).translate(0, 0.5, 0).rotateY(Math.PI / 2)]);
-      const im = new THREE.MeshStandardMaterial({ map: impostorTex(kind), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.9 });
-      const fi = new THREE.InstancedMesh(ig, im, fa.length);
-      fa.forEach((t, i) => { q.setFromAxisAngle(new V3(0, 1, 0), Math.random() * 6.28); mt.compose(new V3(t.x, t.y - 0.3, t.z), q, sc.set(t.sz * 1.6, t.sz * 1.1, t.sz * 1.6)); fi.setMatrixAt(i, mt);
-        c.setHex(kind === 'pine' ? pinec[i % 3] : autumn[(Math.random() * autumn.length) | 0]).multiplyScalar(0.6 + Math.random() * 0.3); fi.setColorAt(i, c); });
-      scene.add(fi);
-    }
+    buildTreeModels(data.oak.concat(data.pine), data.far.oak.concat(data.far.pine));
   }
   function buildGrass() {
     // tussock grass + shrubs along the foot of the wall (crossed alpha cards)
@@ -675,10 +782,11 @@ export function createLevel2(C) {
     for (let i = 0; i < N * 3 && k < N; i++) {
       const s = Math.random() * D.len, f = frame(s, { ..._f }), side = Math.random() < 0.5 ? -1 : 1, dd = HW + PAR + 0.6 + Math.pow(Math.random(), 1.5) * 26;
       if (inGap(s)) continue;
-      const x = f.x + f.rx * side * dd, z = f.z + f.rz * side * dd, y = TH(x, z);
+      const x = f.x + f.rx * side * dd, z = f.z + f.rz * side * dd, y = MH(x, z);
       if (y > f.y - 0.3 && dd < HW + 2) continue;
+      if (inPlaza(x, z, 3) || towerAt(s) || Math.abs(MH(x + 1.5, z) - MH(x - 1.5, z)) > 1.6) continue;
       const sz = 0.8 + Math.random() * 1.6;
-      q.setFromAxisAngle(new V3(0, 1, 0), Math.random() * 6.28); mt.compose(new V3(x, y - 0.05, z), q, new V3(sz, sz * (0.7 + Math.random() * 0.6), sz)); inst.setMatrixAt(k, mt);
+      q.setFromAxisAngle(new V3(0, 1, 0), Math.random() * 6.28); mt.compose(new V3(x, y - 0.12, z), q, new V3(sz, sz * (0.7 + Math.random() * 0.6), sz)); inst.setMatrixAt(k, mt);
       c.setHSL(0.09 + Math.random() * 0.08, 0.35 + Math.random() * 0.25, 0.32 + Math.random() * 0.18); inst.setColorAt(k, c); k++;
     }
     inst.count = k; inst.receiveShadow = true; scene.add(inst);
@@ -706,8 +814,9 @@ export function createLevel2(C) {
     const yaw = Math.atan2(f.tx, f.tz);
     mer.forEach((e, i) => { q.setFromAxisAngle(new V3(0, 1, 0), yaw + (e[2] ? Math.PI / 2 : 0)); mt.compose(P(e[0], e[1], 1.55), q, new V3(1, 1, 1)); mi.setMatrixAt(i, mt); });
     mi.castShadow = !IS_MOBILE; scene.add(mi);
-    HSPOTS.forEach(([al, ac]) => { const p = spotW(al, ac); const pad = new THREE.Mesh(new THREE.RingGeometry(5.2, 5.8, 40), new THREE.MeshBasicMaterial({ color: 0xe8b818 })); pad.rotation.x = -Math.PI / 2; pad.position.set(p.x, py + 0.03, p.z); scene.add(pad); });
+    HSPOTS.forEach(([al, ac]) => { const p = spotW(al, ac); const pad = new THREE.Mesh(new THREE.RingGeometry(5.2, 5.8, 40), PADM || (PADM = new THREE.MeshStandardMaterial({ color: 0xd8ac20, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, depthWrite: false }))); pad.rotation.x = -Math.PI / 2; pad.position.set(p.x, py + 0.02, p.z); pad.renderOrder = 1; pad.receiveShadow = true; scene.add(pad); });
   }
+  let PADM = null;
   const HSPOTS = [[-21, 18], [0, 18], [21, 18], [-21, 35], [0, 35], [21, 35], [10, 26.5]];
   function spotW(al, ac) { const f = frame(D.start, { ..._f }); return new V3(f.x + f.tx * al + f.rx * ac, D.plaza[2], f.z + f.tz * al + f.rz * ac); }
 
@@ -721,13 +830,13 @@ export function createLevel2(C) {
           vec3 d = normalize(vD); float y = d.y;
           float mu = dot(d, uSun);
           // single-scattering style gradient: Rayleigh blue zenith, hazy warm horizon, Mie halo round the sun
-          float hz = exp(-max(y, 0.0) * 6.5);
-          vec3 zen = vec3(0.07, 0.17, 0.42), hor = vec3(0.40, 0.43, 0.44);
+          float hz = exp(-max(y, 0.0) * 4.6);
+          vec3 zen = vec3(0.12, 0.22, 0.43), hor = vec3(0.40, 0.43, 0.44);
           vec3 c = mix(zen, hor, hz);
           c += vec3(0.95, 0.70, 0.42) * hz * 0.25 * pow(max(mu, 0.0), 3.0);
-          float g = 0.76, mie = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * mu, 1.5) * 0.012;
+          float g = 0.76, mie = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * mu, 1.5) * 0.008;
           c += vec3(1.0, 0.85, 0.65) * mie;
-          c += vec3(1.0, 0.95, 0.85) * smoothstep(0.9993, 0.9997, mu) * 6.0;
+          c += vec3(1.0, 0.95, 0.85) * smoothstep(0.9993, 0.9997, mu) * 3.0;
           if (y < 0.0) c = mix(hor, vec3(0.32, 0.34, 0.33), clamp(-y * 4.0, 0.0, 1.0));
           gl_FragColor = vec4(c, 1.0);
           #include <tonemapping_fragment>
@@ -875,7 +984,7 @@ export function createLevel2(C) {
     if (phase === 'warmview') phase = 'warm';
   }
   const WARM = { ms: 0, steps: 0, tex: 0 };
-  function warmView(ph, t) { const keep = phase; phase = ph; clock = t; updateFlight(0); phase = keep; }
+  function warmView(ph, t) { const keep = phase; phase = ph; clock = t; updateFlight(0); phase = keep; updateTreeLOD(camera.position, true); }
   function startFlight() {
     phase = 'flight'; clock = 0; flyS0 = Math.min(D.len - 50, 820); buildFlightPath();
     RACERS.forEach(R => { R.heli.rpm = 1; });
@@ -936,6 +1045,9 @@ export function createLevel2(C) {
         const hov = clamp((tt - 4.2) / 1.6, 0, 1), hv = hov * hov * (3 - 2 * hov);
         tx = lerp(p0.x, p1.x, e); tz = lerp(p0.z, p1.z, e);
         ty = lerp(p0.y, p1.y + 5, sstep(0.2, 1, u)) - 5 * hv + (hov < 1 && hov > 0 ? Math.sin(tt * 5) * 0.08 : 0);
+        // keep the rotor disc (r ~7.5 m) clear of the wall, merlons and towers while crossing the line of the wall
+        { const pr = project(tx, tz, D.start), al = Math.abs(pr.lat);
+          if (al < HW + PAR + 10) { const fy = frame(pr.s).y + (D.towers.some(q => Math.abs(pr.s - q) < 18) ? 20 : 9.5); ty = Math.max(ty, lerp(fy, ty, sstep(HW + PAR + 4, HW + PAR + 10, al))); } }
         const f = frame(D.start, { ..._f }); yaw = lerp(yaw0, Math.atan2(f.tx, f.tz), e);
         H.root.rotation.set(0.12 * (1 - e) - 0.16 * Math.sin(Math.PI * e) * (1 - hv), yaw, 0);
         if (hov >= 1) { H.rpm = Math.max(0.12, H.rpm - dt * 0.35); if (!H.td) { H.td = true; H.dust = 1; } }
@@ -1293,8 +1405,9 @@ export function createLevel2(C) {
     } else if (phase === 'results') { stepAI(dt); chaseCam(dt); }
     if (phase === 'race' || phase === 'done' || phase === 'countdown') hud();
     if (SKY) SKY.position.copy(camera.position);
+    if (TCH.length) updateTreeLOD(camera.position);
     if (SUN && phase !== 'race' && phase !== 'done' && phase !== 'countdown') { SUN.target.position.copy(camera.position); SUN.position.copy(SUNDIR).multiplyScalar(300).add(SUN.target.position); }
   }
   return { start, stop, update, scene, get active() { return active; }, get phase() { return phase; }, get clock() { return clock; },
-    dbg: { scene, renderer, UNSTUCK, unstick, TH, WARM, flightLead, flightLeadRaw, get D() { return D; }, NITRO, get ZM() { return ZM; }, zViews, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
+    dbg: { TCH, MH, scene, renderer, UNSTUCK, unstick, TH, WARM, flightLead, flightLeadRaw, get D() { return D; }, NITRO, get ZM() { return ZM; }, zViews, PL, RACERS, frame, surf, project, respawn, finishOrder, toCountdown, setPhase(v) { phase = v; clock = 0; }, get raceT() { return raceT; } } };
 }
