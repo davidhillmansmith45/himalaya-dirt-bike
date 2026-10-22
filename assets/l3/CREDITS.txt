@@ -4,3 +4,9 @@ All textures are CC0 (public domain) from Poly Haven (https://polyhaven.com):
   (+ aerial_grass_rock, shared with Level 2)
 All geometry (palms, sharks, swimmers, rescue boat, debris, wave) is procedural; all Level 3 audio
 (surf, siren, wave roar, sharks/tension, horn, birds) is synthesized at runtime with Web Audio.
+
+Level 3 watercraft (craft/yacht.glb, craft/jet-ski.glb)
+  "Motor Yacht" and "Jet Ski" from the Grab3D Cozy Boats & Aircraft Kit, https://grab3d.com/models/vehicles/yacht/ and
+  https://grab3d.com/models/vehicles/jet-ski/ ; licence CC0 1.0 (public domain, no attribution required).
+  Re-encoded for mobile: textures resized to 1024 px WebP, geometry meshopt-compressed (gltf-transform). Jet-ski hood re-tinted per rider in-shader.
+meshopt_decoder.module.js (vendor/addons/libs) - meshoptimizer by Arseny Kapoulkine, MIT licence (from three.js r160).

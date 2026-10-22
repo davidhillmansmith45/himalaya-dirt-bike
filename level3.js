@@ -6,6 +6,7 @@
 import { createNitroFx } from './nitro.js?v=1';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
 export function createLevel3(C) {
   const { THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries } = C;
@@ -1327,7 +1328,7 @@ export function createLevel3(C) {
   const _a = new V3(), _b = new V3(); let camShot = -1;
   // ================================================================== ocean swim: swimmers, sharks, debris, rescue boat
   const BOAT_P = new V3(1000, 0, -3700);          // rescue boat, far out in open water: a 1.5-2.5 km jet-ski run from where the riders surface
-  const LADDER_OFF = 6.3;                          // stern ladder, metres from the boat centre toward the swimmers (+z)
+  const LADDER_OFF = 7.45;                         // stern ladder, metres from the boat centre toward the swimmers (+z)
   const BOAT_YAW = Math.PI * 0.74;                 // stern quarter toward the swimmers: you see her profile and the ladder
   const LADDER = () => _l.set(BOAT_P.x - Math.sin(BOAT_YAW) * LADDER_OFF, 0, BOAT_P.z - Math.cos(BOAT_YAW) * LADDER_OFF);
   // world <-> boat-local (model: bow +z, beam x)
@@ -1443,6 +1444,42 @@ export function createLevel3(C) {
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
     SKI_HULL = g; return g;
   }
+
+  // ---- real watercraft models (CC0, Grab3D "Cozy Boats & Aircraft Kit"): motor yacht + jet ski; WebP textures, meshopt geometry.
+  // Loaded with the level (TEXP); the procedural boat / skis stay as a fallback if the files fail to load.
+  const CRAFT = { ready: false, p: null, ski: null, yacht: null };
+  const YACHT_OFF = new V3(0, -0.62, 2.6);   // model -> boat group: waterline (antifouling top) at the sea surface, swim platform at the stern ladder
+  const DECK_Y = 3.10 - 0.62;                // aft-cockpit sole height in the boat group
+  function loadCraft() {
+    if (CRAFT.p) return CRAFT.p;
+    const gl = new GLTFLoader(); gl.setMeshoptDecoder(MeshoptDecoder);
+    const ld = (u) => new Promise((res) => gl.load(u, res, undefined, (e) => { console.warn('[l3] craft', u, e); res(null); }));
+    CRAFT.p = Promise.all([ld('./assets/l3/craft/yacht.glb?v=1'), ld('./assets/l3/craft/jet-ski.glb?v=1')]).then(([y, k]) => {
+      if (!y || !k) return;
+      try {
+        const prep = (r) => { r.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; const ms = Array.isArray(o.material) ? o.material : [o.material]; ms.forEach(m => { if (m.map) m.map.anisotropy = aniso; m.envMapIntensity = 1; }); } }); return r; };
+        CRAFT.yacht = prep(y.scene); CRAFT.yacht.traverse(o => { if (/propeller|rudder/.test(o.name)) o.visible = false; }); /* running gear sits below the translucent sea surface */ CRAFT.ski = prep(k.scene); CRAFT.ready = true;
+      } catch (e) { console.warn('[l3] craft prep', e); } });
+    TEXP.push(CRAFT.p); return CRAFT.p;
+  }
+  // per-rider hood / seat-cowl colour: the model's mint paint is re-tinted in the shader (keeps its baked AO + normal map)
+  function tintSkiMat(src, col) {
+    const m = src.clone(); m.userData.tint = { value: new THREE.Color(col) };
+    m.onBeforeCompile = (sh) => { sh.uniforms.uTint = m.userData.tint;
+      sh.fragmentShader = 'uniform vec3 uTint;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+        { vec3 c = diffuseColor.rgb; float mint = smoothstep(0.08, 0.2, c.g - c.r) * smoothstep(0.03, 0.1, c.g - c.b);
+          float lum = dot(c, vec3(0.3, 0.59, 0.11)); diffuseColor.rgb = mix(c, uTint * clamp(lum * 1.7, 0.35, 1.25), mint); }`); };
+    m.customProgramCacheKey = () => 'skitint'; return m;
+  }
+  function realSki(k, R) {
+    if (k.real || !CRAFT.ready) return;
+    const r = CRAFT.ski.clone(true); r.position.y = -0.1;
+    r.traverse(o => { if (o.isMesh && o.material && /body/.test(o.material.name)) o.material = tintSkiMat(o.material, R.col); });
+    let bars = null; r.traverse(o => { if (!bars && /handlebar/.test(o.name)) bars = o; });
+    k.proc.forEach(o => { o.visible = false; }); k.tilt.add(r); k.real = r;
+    if (bars) { k.bars = bars; bars.rotation.order = 'YXZ'; }
+    k.nums.forEach((n, i) => { n.position.set((i ? 1 : -1) * 0.655, 0.36, -0.75); n.scale.setScalar(0.7); });
+  }
   function makeJetSki(R) {
     const g = new THREE.Group(); g.rotation.order = 'YXZ';
     const base = new THREE.Color(R.col), hullM = new THREE.MeshStandardMaterial({ color: 0xf2f3f4, roughness: 0.32, metalness: 0.05, side: THREE.DoubleSide });
@@ -1465,15 +1502,30 @@ export function createLevel3(C) {
     const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.22), new THREE.MeshStandardMaterial({ color: 0x223040, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.6, side: THREE.DoubleSide })); scr.position.set(0, 0.98, 0.52); scr.rotation.x = -0.9; tilt.add(scr);
     const noz = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.25, 10), darkM); noz.rotation.x = Math.PI / 2; noz.position.set(0, 0.05, -1.6); tilt.add(noz);
     const num = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.24), new THREE.MeshBasicMaterial({ map: canvasTex(128, 64, (c, w, h) => { c.fillStyle = '#fff'; c.font = '900 46px Arial'; c.textAlign = 'center'; c.fillText(R.player ? 'YOU' : String(R.num), w / 2, 48); }), transparent: true }));
-    for (const sd of [-1, 1]) { const n = num.clone(); n.position.set(sd * 0.6, 0.33, 0.35); n.rotation.y = sd * Math.PI / 2; tilt.add(n); }
+    const proc = tilt.children.slice(), nums = [];
+    for (const sd of [-1, 1]) { const n = num.clone(); n.position.set(sd * 0.6, 0.33, 0.35); n.rotation.y = sd * Math.PI / 2; tilt.add(n); nums.push(n); }
+    // foam wake: a soft V of churned water trailing the hull (opacity follows speed)
+    const wk = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 9).rotateX(-Math.PI / 2).translate(0, 0.16, -5.2), new THREE.MeshBasicMaterial({ map: skiWakeTex(), transparent: true, depthWrite: false, opacity: 0, fog: true, color: 0xffffff }));
+    wk.renderOrder = 2; g.add(wk);
     g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
     g.visible = false; scene.add(g);
-    return { g, tilt, bars };
+    const k = { g, tilt, bars, proc, nums, wake: wk }; realSki(k, R); return k;
+  }
+  let SKI_WAKE = null;
+  function skiWakeTex() {
+    if (SKI_WAKE) return SKI_WAKE;
+    SKI_WAKE = canvasTex(128, 256, (c, w, h) => { const img = c.createImageData(w, h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const v = 1 - y / h, u = Math.abs(x / w - 0.5) * 2;          // v: 1 at the stern, 0 far behind
+        const sp = 0.18 + (1 - v) * 0.8, arm = Math.exp(-((u - sp) ** 2) / 0.006), core = Math.exp(-(u * u) / (0.02 + (1 - v) * 0.08)) * 0.8;
+        const n = 0.6 + 0.4 * Math.sin(x * 1.7 + y * 0.9) * Math.sin(y * 0.37 - x * 0.5);
+        const a = Math.min(1, (arm + core) * n) * Math.pow(v, 1.3) * Math.min(1, (1 - v) * 12 + 0.3); const i = (y * w + x) * 4;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = 245; img.data[i + 3] = a * 255; }
+      c.putImageData(img, 0, 0); }); return SKI_WAKE;
   }
   // seated riding pose for the polo-shirt rider (the swimmer model is built lying along +z; stand it up and sit it down)
   function poseRider(W, dt) {
     const m = W.m, k = W.ski; if (m.g.parent !== k.tilt) { k.tilt.add(m.g); m.g.scale.setScalar(1.12); }
-    m.g.position.set(0, 0.78, -0.62); m.g.rotation.set(-Math.PI / 2 + 0.22 - (W.crouch || 0) * 0.25, 0, 0);
+    m.g.position.set(0, k.real ? 0.7 : 0.78, k.real ? -0.6 : -0.62); m.g.rotation.set(-Math.PI / 2 + 0.22 - (W.crouch || 0) * 0.25, 0, 0);
     m.body.rotation.z = (W.lean || 0) * 0.6;
     for (let s = 0; s < 2; s++) { m.arms[s].rotation.set(0.55, 0, (s ? -1 : 1) * 0.22); m.elb[s].rotation.x = -0.55; }
     for (let s = 0; s < 2; s++) { m.legs[s].rotation.set(-1.45, 0, (s ? -1 : 1) * 0.18); m.knees[s].rotation.x = 1.75; }
@@ -1798,9 +1850,11 @@ export function createLevel3(C) {
     m.mixer.update(dt);
   }
   // ---- rescue boat
+  const DECK_SLOTS = [[-1.25, -4.95, 0.25], [1.2, -5.0, -0.25], [-1.45, -3.2, 0.5], [0.0, -2.75, 0.0], [-0.05, -5.0, 0.05], [0.75, -3.35, -0.35], [-1.7, -4.1, 0.6], [1.6, -4.2, -0.5]];
+  const _dk = new V3();
   let BOAT = null;
   function buildBoat() {
-    loadRealMan();
+    loadRealMan(); loadCraft();
     const g = new THREE.Group(); const L = 13, NS = 26, pos = [], col = [], idx = [];
     const orange = new THREE.Color(0xe2541c), white = new THREE.Color(0xf2f2ee), red = new THREE.Color(0x8a1e18);
     const sec = (w, dk, kl) => [[-w, dk], [-w * 0.98, 0.9], [-w * 0.86, 0.1], [-w * 0.45, -0.45], [0, kl], [w * 0.45, -0.45], [w * 0.86, 0.1], [w * 0.98, 0.9], [w, dk]];
@@ -1840,20 +1894,38 @@ export function createLevel3(C) {
     // a crewman in a life jacket at the stern, waving the riders in
     const crewM = makeStandMan({ shirt: 0x24324a, hair: 0x2a1c14, pants: 0x2b2f36, vest: 0xff5a10 });
     crewM.g.position.set(-1.45, 1.54, -2.3); crewM.g.rotation.y = Math.PI - 0.5; g.add(crewM.g);
+    const proc = g.children.filter(o => o !== crewM.g && o !== bar);
+    // foam collar where the hull meets the sea (soft ring, slightly heavier at the bow and the stern quarter)
+    const ft0 = canvasTex(128, 256, (c, w, h) => { const img = c.createImageData(w, h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const u = (x / w - 0.5) * 2, v = (y / h - 0.5) * 2, d = Math.hypot(u, v * 1.0);
+        const n = 0.55 + 0.45 * Math.sin(x * 0.9 + y * 0.31) * Math.sin(y * 0.53 - x * 0.27); const a = Math.exp(-((d - 0.8) ** 2) / 0.012) * n + Math.exp(-((d - 0.92) ** 2) / 0.004) * 0.5 * n; const i = (y * w + x) * 4;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = 248; img.data[i + 3] = Math.min(1, a) * 220; }
+      c.putImageData(img, 0, 0); });
+    const foam = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 23).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: ft0, transparent: true, depthWrite: false, fog: true, opacity: 0.85 }));
+    foam.position.set(0, 0.2, 2.2); foam.renderOrder = 2; foam.visible = false; g.add(foam);
     g.rotation.y = BOAT_YAW; g.visible = false; scene.add(g);
-    BOAT = { g, crew: crewM, bar, flare: null, flT: 3, hornT: 1.5, deckSlots: 0 };
+    BOAT = { g, crew: crewM, bar, flare: null, flT: 3, hornT: 1.5, deckSlots: 0, proc, foam, letters: proc.filter(o => o.material && o.material.map && o.geometry.type === 'PlaneGeometry') };
     // flare (additive glow sprite; no real light, so nothing recompiles)
     const ft = canvasTex(64, 64, (c) => { const gr = c.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,240,220,1)'); gr.addColorStop(0.25, 'rgba(255,60,30,0.9)'); gr.addColorStop(1, 'rgba(255,0,0,0)'); c.fillStyle = gr; c.fillRect(0, 0, 64, 64); });
     const fs = new THREE.Sprite(new THREE.SpriteMaterial({ map: ft, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false, toneMapped: false })); fs.scale.set(9, 9, 1); fs.visible = false; scene.add(fs);
     BOAT.flare = { s: fs, p: new V3(), v: new V3(), t: 0, on: false };
   }
-  function swapCrew() { if (!RM.ready || !BOAT || BOAT.crew.real) return; const o = BOAT.crew.g; const c = makeStandMan({ shirt: 0x24324a, hair: 0x2a1c14, pants: 0x2b2f36, vest: 0xff5a10 }); c.g.position.copy(o.position); c.g.rotation.copy(o.rotation); o.parent.add(c.g); o.parent.remove(o); BOAT.crew = c; poseStandMan(c, 0, 'idle', 1); }
+  function swapBoat() {
+    if (!BOAT || BOAT.real || !CRAFT.ready) return;
+    const y = CRAFT.yacht.clone(true); y.position.copy(YACHT_OFF); BOAT.g.add(y); BOAT.real = y;
+    BOAT.proc.forEach(o => { o.visible = BOAT.letters.includes(o); }); BOAT.foam.visible = true;
+    // RESCUE on the topsides, light bar on the hardtop, crewman in the aft cockpit by the transom gate
+    BOAT.letters.forEach(p => { p.position.set(Math.sign(p.position.x) * 2.47, 1.55, 3.6); p.scale.setScalar(0.85); });
+    BOAT.bar.position.set(0, 9.04 - 0.62 + 0.02, 2.6 - 1.2); BOAT.bar.scale.set(1, 0.8, 1);
+    BOAT.crew.g.position.set(1.7, DECK_Y, -2.75); BOAT.crew.g.rotation.y = Math.PI - 0.45;
+  }
+  function swapCrew() { swapBoat(); if (!RM.ready || !BOAT || BOAT.crew.real) return; const o = BOAT.crew.g; const c = makeStandMan({ shirt: 0x24324a, hair: 0x2a1c14, pants: 0x2b2f36, vest: 0xff5a10 }); c.g.position.copy(o.position); c.g.rotation.copy(o.rotation); o.parent.add(c.g); o.parent.remove(o); BOAT.crew = c; poseStandMan(c, 0, 'idle', 1); }
   function updateBoat(dt, t) {
     if (!BOAT || !BOAT.g.visible) return;
-    const x = BOAT_P.x, z = BOAT_P.z, B = fromBoat(0, 5), S = fromBoat(0, -5), Pt = fromBoat(-2, 0), Sb = fromBoat(2, 0);
+    const x = BOAT_P.x, z = BOAT_P.z, B = fromBoat(0, 9), S = fromBoat(0, -6), Pt = fromBoat(-2.4, 1), Sb = fromBoat(2.4, 1);
     const hb = waterHJ(B[0], B[1]), hs = waterHJ(S[0], S[1]), hl = waterHJ(Pt[0], Pt[1]), hr = waterHJ(Sb[0], Sb[1]);
     BOAT.g.position.set(x, (hb + hs + hl + hr) / 4 - 0.15, z);
-    BOAT.g.rotation.order = 'YXZ'; BOAT.g.rotation.set(-Math.atan2(hb - hs, 10) * 0.7, BOAT_YAW, Math.atan2(hr - hl, 4) * 0.5);
+    BOAT.g.rotation.order = 'YXZ'; BOAT.g.rotation.set(-Math.atan2(hb - hs, 15) * 0.6, BOAT_YAW, Math.atan2(hr - hl, 4.8) * 0.45);
     swapCrew();
     poseStandMan(BOAT.crew, t + 1.3, 'wave', 1); BOAT.bar.material.emissiveIntensity = (Math.sin(t * 9) > 0 ? 2.2 : 0.3);
     const F = BOAT.flare; BOAT.flT -= dt;
@@ -1986,7 +2058,7 @@ export function createLevel3(C) {
         if (W.v > 8 && W.bump <= 0) { W.v *= 0.55; W.bump = 0.6; if (W.player) { C.state.shake = 0.35; toast('DEBRIS!', 700); } splashSnd(W.player ? 0.4 : 0.1); }
         if (!W.player && !(W.avoidT > 0)) { fwd(W.yaw, _w); W.avoidT = 1.0; W.avoidSd = (_w.x * dz - _w.z * dx) > 0 ? -1 : 1; } } }
     W.bump = Math.max(0, (W.bump || 0) - dt);
-    { let [lx, lz] = toBoat(W.x, W.z); if (Math.abs(lx) < 2.6 && lz > -6.6 && lz < 7.2) { const px = 2.6 - Math.abs(lx), pz = lz + 6.6; if (px < pz) lx = Math.sign(lx || 1) * 2.6; else lz = -6.6; [W.x, W.z] = fromBoat(lx, lz); W.v *= 0.9; } }
+    { let [lx, lz] = toBoat(W.x, W.z); if (Math.abs(lx) < 2.7 && lz > -7.3 && lz < 12.3) { const px = 2.7 - Math.abs(lx), pz = lz + 7.3; if (px < pz) lx = Math.sign(lx || 1) * 2.7; else lz = -7.3; [W.x, W.z] = fromBoat(lx, lz); W.v *= 0.9; } }
     poseSki(W, dt, wl);
     // wake + rooster-tail spray
     if (W.v > 6 && !W.air && camera.position.distanceTo(W.ski.g.position) < 90 && Math.random() < 0.85) {
@@ -1996,7 +2068,8 @@ export function createLevel3(C) {
     }
   }
   function poseSki(W, dt, wl) {
-    const k = W.ski; k.g.position.set(W.x, W.y - 0.12, W.z); k.g.rotation.set(0, W.yaw, 0);
+    const k = W.ski; if (!k.real) realSki(k, W.R); k.g.position.set(W.x, W.y - 0.12, W.z); k.g.rotation.set(0, W.yaw, 0);
+    k.wake.material.opacity += ((W.air || W.offT > 0 || W.ko ? 0 : clamp((W.v - 3) / 18, 0, 0.8)) - k.wake.material.opacity) * Math.min(1, dt * 4);
     // pitch from the swell slope ahead / in the air nose-up then down; roll into turns
     fwd(W.yaw, _w); const ah = waterHJ(W.x + _w.x * 1.5, W.z + _w.z * 1.5), bh = waterHJ(W.x - _w.x * 1.5, W.z - _w.z * 1.5);
     const tp = W.air ? clamp(W.vy * 0.05, -0.35, 0.3) : Math.atan2(ah - bh, 3) - Math.min(0.12, W.v * 0.005);
@@ -2036,11 +2109,12 @@ export function createLevel3(C) {
     W.climb = Math.min(1, W.climb + dt / 2.6);
     const L = LADDER(), wl = waterHJ(L.x, L.z), slot = W.slot != null ? W.slot : (W.slot = BOAT.deckSlots++);
     // park the ski behind the boat, fanned out by finishing order
-    { const [px, pz] = fromBoat((slot % 4 - 1.5) * 2.4, -10 - Math.floor(slot / 4) * 4); W.x = lerp(W.x, px, Math.min(1, dt * 1.5)); W.z = lerp(W.z, pz, Math.min(1, dt * 1.5)); W.v = 0; W.lean *= 0.9;
-      const k = W.ski, kw = waterHJ(W.x, W.z); k.g.position.set(W.x, kw - 0.12, W.z); k.g.rotation.y = lerp(k.g.rotation.y, BOAT_YAW, Math.min(1, dt)); k.tilt.rotation.set(Math.sin(SWS.t * 1.3 + slot) * 0.03, 0, Math.sin(SWS.t * 1.7 + slot) * 0.04); if (W.tag) W.tag.visible = false; }
-    const deckY = BOAT.g.position.y + 1.55;
+    { const [px, pz] = fromBoat((slot % 4 - 1.5) * 2.4, -10.6 - Math.floor(slot / 4) * 4); W.x = lerp(W.x, px, Math.min(1, dt * 1.5)); W.z = lerp(W.z, pz, Math.min(1, dt * 1.5)); W.v = 0; W.lean *= 0.9;
+      const k = W.ski, kw = waterHJ(W.x, W.z); k.g.position.set(W.x, kw - 0.12, W.z); k.g.rotation.y = lerp(k.g.rotation.y, BOAT_YAW, Math.min(1, dt)); k.tilt.rotation.set(Math.sin(SWS.t * 1.3 + slot) * 0.03, 0, Math.sin(SWS.t * 1.7 + slot) * 0.04); if (W.tag) W.tag.visible = false; k.wake.material.opacity *= 0.95; }
     const u = W.climb, up = sstep(0.05, 0.7, u), on = sstep(0.65, 1, u);
-    const [tx, tz] = fromBoat((slot % 3 - 1) * 0.9 * on, -6.3 + 0.4 + on * (1.2 + Math.floor(slot / 3) * 0.9));
+    // aft cockpit standing spots (boat-local; clear of the centre hatch, the transom bench and the crewman)
+    const SL = DECK_SLOTS[slot % DECK_SLOTS.length], sx = SL[0] * on, sz = lerp(-LADDER_OFF + 0.4, SL[1], on);
+    const dp = BOAT.g.localToWorld(_dk.set(sx, BOAT.real ? DECK_Y : 1.55, sz)), deckY = dp.y, tx = dp.x, tz = dp.z;
     W.cx = lerp(W.cx == null ? L.x : W.cx, tx, Math.min(1, dt * 4)); W.cz = lerp(W.cz == null ? L.z : W.cz, tz, Math.min(1, dt * 4));
     const cy = lerp(wl - 0.4, deckY + 1.1, up), cyaw = BOAT_YAW + Math.PI * (1 - on);
     const m = W.m; m.g.position.set(W.cx, cy, W.cz); m.g.rotation.set(-Math.PI / 2 * Math.max(up, on), cyaw, 0);
@@ -2054,7 +2128,7 @@ export function createLevel3(C) {
     m.g.visible = !onDeck; D.g.visible = onDeck;
     if (onDeck) {
       W.dmT += dt; const t = W.dmT, ph = slot * 0.9;
-      D.g.position.set(W.cx, deckY + (D.real ? 0.015 : -0.01), W.cz); D.g.rotation.set(BOAT.g.rotation.x * 0.3, BOAT_YAW + Math.PI + (slot % 3 - 1) * 0.35, 0);
+      D.g.position.set(W.cx, deckY + (D.real ? 0.015 : -0.01), W.cz); D.g.rotation.set(0, BOAT_YAW + Math.PI + SL[2], 0);
       const mode = t < 0.5 ? 'idle' : t < 3.2 ? 'cheer' : (Math.floor((t + ph) / 4) % 2 ? 'idle' : 'wave');
       const k = mode === 'cheer' ? sstep(0.5, 0.85, t) * (1 - sstep(2.9, 3.2, t)) : mode === 'wave' ? Math.min(sstep(0, 0.4, (t + ph) % 4), 1 - sstep(3.6, 4, (t + ph) % 4)) : 1;
       poseStandMan(D, t + ph, mode, k);

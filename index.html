@@ -1130,12 +1130,13 @@ function makeTerrainMaterial() {
   mat.userData.uniforms = uniforms;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = 'attribute float aMask;\nvarying vec3 vTW;\nvarying float vMask;\n' + shader.vertexShader.replace(
+    shader.vertexShader = 'attribute float aMask;\nvarying vec3 vTW;\nvarying float vMask;\nvarying vec3 vGN;\n' + shader.vertexShader.replace(
       '#include <worldpos_vertex>',
-      '#include <worldpos_vertex>\n  vTW = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vMask = aMask;'
+      '#include <worldpos_vertex>\n  vTW = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vMask = aMask;\n  vGN = normalize(mat3(modelMatrix) * objectNormal);'
     );
     shader.fragmentShader = `varying vec3 vTW;
 varying float vMask;
+varying vec3 vGN;
 vec3 acesT(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 uniform sampler2D tNearA, tNearN, tNearX, tFarA, tFarN, tFarX, tRock, tSnow, tClouds, tDetail;
 uniform vec4 uNear, uFar;
@@ -1173,6 +1174,10 @@ vec3 triN(sampler2D t, vec3 p, vec3 bw, float sc, out float lum) {
       rtShadow = getShadow( directionalShadowMap[ 0 ], directionalLightShadows[ 0 ].shadowMapSize, directionalLightShadows[ 0 ].shadowBias, directionalLightShadows[ 0 ].shadowRadius, vDirectionalShadowCoord[ 0 ] );
     #endif
     float mtn = smoothstep(0.02, 0.6, vMask);
+    // near the course trust the real mesh normal (the baked map predates the reshaped valley-rim talus)
+    vec3 gn = normalize(vGN);
+    float nearG = 1.0 - smoothstep(700.0, 3200.0, dist);
+    n = normalize(mix(n, gn, 0.0 * nearG));
     // macro rock detail: real cliff scan (triplanar), two scales, fades out with distance
     vec3 bw = pow(abs(n), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
     {
@@ -1216,6 +1221,25 @@ vec3 triN(sampler2D t, vec3 p, vec3 bw, float sc, out float lum) {
         alb *= mix(1.0, clamp(lm, 0.6, 1.4), 0.5 * fm);
       }
     }
+    // Steep walls: the top-down satellite albedo smears vertically there. Replace it with layered gneiss/schist
+    // strata (warped horizontal bands, world-Y) modulated by the triplanar rock scan; scree tones below.
+    float steepW = 0.0 * smoothstep(0.28, 0.55, 1.0 - gn.y) * mtn * (1.0 - smoothstep(2500.0, 6000.0, dist));
+    float strataSnow = 0.0;
+    if (steepW > 0.01) {
+      float wp = texture2D(tDetail, vTW.xz * 0.0027 + 0.5).g * 2.2 + texture2D(tDetail, vTW.xz * 0.011).r * 0.5;
+      float yb = vTW.y / 21.0 + wp;
+      float bA = texture2D(tDetail, vec2(yb * 0.07, 0.31)).r, bB = texture2D(tDetail, vec2(yb * 0.23, 0.73)).g;
+      float band = clamp(bA * 0.65 + bB * 0.55 - 0.1, 0.0, 1.0);
+      vec3 stC = mix(vec3(0.17, 0.155, 0.14), vec3(0.40, 0.365, 0.32), band);
+      stC = mix(stC, vec3(0.33, 0.25, 0.18), 0.35 * smoothstep(0.62, 0.8, bB));       // iron-stained layers
+      float lr; vec3 dr = triN(tRock, vTW, bw, 1.0 / 31.0, lr);
+      stC *= clamp(lr, 0.45, 1.6);
+      alb = mix(alb, stC, 0.82 * steepW);
+      n = normalize(n + (dr * 0.9 + vec3(0.0, (band - 0.5) * 0.6, 0.0)) * steepW * nearG);
+      // snow caught on strata ledges and in gullies higher up
+      float lg = smoothstep(0.55, 0.8, bB) * smoothstep(0.25, 0.5, texture2D(tSnow, vTW.xz / 90.0 + vTW.y * 0.004).r);
+      strataSnow = lg * smoothstep(110.0, 260.0, vTW.y) * steepW;
+    }
     // snow: baked DEM/wind mask, broken up by an aerial snow scan -> crisp snowline, rock poking through
     float snow = 0.0;
     vec3 s1 = texture2D(tSnow, vTW.xz / 70.0).rgb;
@@ -1238,6 +1262,7 @@ vec3 triN(sampler2D t, vec3 p, vec3 bw, float sc, out float lum) {
       float fl = smoothstep(0.50, 0.66, f + snowM * 0.25 + (hi - 0.5) * 0.12) * hi * stp;
       snow = max(snow, fl * 0.92);
     }
+    snow = max(snow, strataSnow * 0.9);
     vec3 snowAlb = vec3(0.70, 0.735, 0.79) * (0.88 + 0.12 * s1.r);
     alb = mix(alb, snowAlb, snow);
     // drifting cloud shadows over the ranges
@@ -1439,12 +1464,52 @@ function buildCorridorPatch(F, R, heightAt, maskAt, material) {
 let terrainHeightAt = null;
 async function buildTerrain() {
   const [gN, gF] = await Promise.all([loadHeightGrid(TERRAIN.near.h), loadHeightGrid(TERRAIN.far.h)]);
-  const heightAt = (x, z) => {
-    // Course basin: exact analytic scrub (same formula as groundAt) -> no bilinear moire.
-    if (sampleGrid(gF, TERRAIN.far, x, z, gF.m) < 0.002) { const cn = courseNearest(x, z); return basinY(x, z, cn.d) + baseAt(cn.s); }
+  const basinH = (x, z) => { const cn = courseNearest(x, z); return basinY(x, z, cn.d) + baseAt(cn.s); };
+  const demH = (x, z) => {
     const hf = sampleGrid(gF, TERRAIN.far, x, z);
     const w = nearWeight(x, z);
     return w > 0 ? hf + (sampleGrid(gN, TERRAIN.near, x, z) - hf) * w : hf;
+  };
+  // Valley-rim talus: the DEM used to shoot straight up out of the flat course basin as a sheer, texture-smeared
+  // wall with saw-tooth teeth. Distance-to-basin field -> concave scree/talus apron (steepening into the real
+  // DEM cliffs higher up), smooth-min'd against the DEM so the rim is continuous and naturally graded.
+  const RIM = (() => {
+    const cell = 8, n = TERRAIN.near, x0 = n.x0, z0 = n.z0, N = Math.ceil(n.size / cell) + 1;
+    const d = new Float32Array(N * N).fill(1e6), hs = new Float32Array(N * N);
+    for (let k = 0; k < N; k++) for (let i = 0; i < N; i++) {
+      const x = x0 + i * cell, z = z0 + k * cell;
+      if (sampleGrid(gF, TERRAIN.far, x, z, gF.m) < 0.002) { d[k * N + i] = 0; hs[k * N + i] = basinH(x, z); }
+    }
+    const a = cell, b = cell * Math.SQRT2;
+    const rel = (o, q, c) => { if (d[q] + c < d[o]) { d[o] = d[q] + c; hs[o] = hs[q]; } };
+    for (let k = 0; k < N; k++) for (let i = 0; i < N; i++) { const o = k * N + i;
+      if (i > 0) rel(o, o - 1, a);
+      if (k > 0) { rel(o, o - N, a); if (i > 0) rel(o, o - N - 1, b); if (i < N - 1) rel(o, o - N + 1, b); } }
+    for (let k = N - 1; k >= 0; k--) for (let i = N - 1; i >= 0; i--) { const o = k * N + i;
+      if (i < N - 1) rel(o, o + 1, a);
+      if (k < N - 1) { rel(o, o + N, a); if (i < N - 1) rel(o, o + N + 1, b); if (i > 0) rel(o, o + N - 1, b); } }
+    return { at(x, z) {
+      let fx = (x - x0) / cell, fz = (z - z0) / cell;
+      if (fx < 0 || fz < 0 || fx > N - 1.001 || fz > N - 1.001) return null;
+      const i = fx | 0, k = fz | 0, tx = fx - i, tz = fz - k, o = k * N + i;
+      const lerp = (A) => { const p = A[o] + (A[o + 1] - A[o]) * tx, q = A[o + N] + (A[o + N + 1] - A[o + N]) * tx; return p + (q - p) * tz; };
+      return [lerp(d), hs[o]];
+    } };
+  })();
+  const RIM_R = 230;
+  const heightAt = (x, z) => {
+    // Course basin: exact analytic scrub (same formula as groundAt) -> no bilinear moire.
+    if (sampleGrid(gF, TERRAIN.far, x, z, gF.m) < 0.002) return basinH(x, z);
+    const h = demH(x, z);
+    const r = RIM.at(x, z);
+    if (!r || r[0] > RIM_R) return h;
+    const dd = r[0], nz = fbm(x * 0.021, z * 0.021);
+    // concave talus profile (~12 deg at the toe -> ~40 deg near the top of the fan), lobed by noise
+    const fan = r[1] + (0.2 * dd + 0.0042 * dd * dd) * (0.8 + 0.45 * nz);
+    const k = 14, hh = Math.max(k - Math.abs(h - fan), 0) / k;
+    const sm = Math.min(h, fan) - hh * hh * k * 0.25;          // smooth-min: no crease where fan meets cliff
+    const w = smooth01(dd, RIM_R * 0.7, RIM_R);                 // fade back to the pure DEM
+    return sm + (h - sm) * w;                                   // only ever cuts the DEM down, never raises it
   };
   terrainHeightAt = heightAt;
   const NA = IS_MOBILE ? 448 : 864;
@@ -5179,7 +5244,7 @@ function startLevel3(opts) {
   if (L3loading) return L3loading;
   try { if (EG && EG.active) EG.stop(); } catch (e) { console.warn('[l3] eg stop', e); }
   try { if (L2 && L2.active && L2.stop) L2.stop(); } catch (e) { console.warn('[l3] l2 stop', e); }
-  L3loading = import('./level3.js?v=8').then(mod => {
+  L3loading = import('./level3.js?v=9').then(mod => {
     L3 = mod.createLevel3({ THREE, renderer, camera, keys, IS_MOBILE, toast, mergeGeometries, GLTFLoader, AI, state, envTex: scene.environment,
       getBike: () => bike, getRider: () => RIDER, syncBike, SFX });
     window.__game.L3 = L3;
